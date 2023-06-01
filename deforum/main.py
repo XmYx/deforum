@@ -37,13 +37,13 @@ from deforum.datafunctions.subtitle_handler import format_animation_params, writ
 from deforum.general_utils import isJson
 
 
-
 class Deforum:
-    
-    def __init__(self, args, anim_args, video_args, parseq_args, loop_args, controlnet_args, root, opts=None, state=None):
-        
+
+    def __init__(self, args, anim_args, video_args, parseq_args, loop_args, controlnet_args, root, opts=None,
+                 state=None):
+
         super().__init__()
-        
+
         self.args = args
         self.anim_args = anim_args
         self.video_args = video_args
@@ -53,18 +53,18 @@ class Deforum:
         self.root = root
         self.opts = opts
         self.state = state
-        
+
     def __call__(self, *args, **kwargs):
         if self.opts is not None:
             if self.opts.data.get("deforum_save_gen_info_as_srt",
-                             False):  # create .srt file and set timeframe mechanism using FPS
+                                  False):  # create .srt file and set timeframe mechanism using FPS
                 srt_filename = os.path.join(self.args.outdir, f"{self.root.timestring}.srt")
                 srt_frame_duration = init_srt_file(srt_filename, self.video_args.fps)
 
         if self.anim_args.animation_mode in ['2D', '3D']:
             # handle hybrid video generation
             if self.anim_args.hybrid_composite != 'None' or self.anim_args.hybrid_motion in ['Affine', 'Perspective',
-                                                                                   'Optical Flow']:
+                                                                                             'Optical Flow']:
                 self.args, self.anim_args, inputfiles = hybrid_generation(self.args, self.anim_args, self.root)
                 # path required by hybrid functions, even if hybrid_comp_save_extra_frames is False
                 hybrid_frame_path = os.path.join(self.args.outdir, 'hybridframes')
@@ -84,7 +84,7 @@ class Deforum:
 
         # handle controlnet video input frames generation
         self.handle_controlnet(self.args, self.anim_args, self.controlnet_args)
-        #if is_controlnet_enabled(self.controlnet_args):
+        # if is_controlnet_enabled(self.controlnet_args):
         #    unpack_controlnet_vids(self.args, self.anim_args, self.controlnet_args)
 
         # use parseq if manifest is provided
@@ -93,8 +93,9 @@ class Deforum:
         else:
             use_parseq = False
         # expand key frame strings to values
-        keys = DeformAnimKeys(self.anim_args, self.args.seed) if not use_parseq else ParseqAnimKeys(self.parseq_args, self.anim_args,
-                                                                                          self.video_args)
+        keys = DeformAnimKeys(self.anim_args, self.args.seed) if not use_parseq else ParseqAnimKeys(self.parseq_args,
+                                                                                                    self.anim_args,
+                                                                                                    self.video_args)
         loopSchedulesAndData = LooperAnimKeys(self.loop_args, self.anim_args, self.args.seed)
 
         # create output folder for the batch
@@ -102,7 +103,8 @@ class Deforum:
         print(f"Saving animation frames to:\n{self.args.outdir}")
 
         # save settings.txt file for the current run
-        self.save_settings_from_animation_run(self.args, self.anim_args, self.parseq_args, self.loop_args, self.controlnet_args, self.video_args, self.root)
+        self.save_settings_from_animation_run(self.args, self.anim_args, self.parseq_args, self.loop_args,
+                                              self.controlnet_args, self.video_args, self.root)
 
         # resume from timestring
         if self.anim_args.resume_from_timestring:
@@ -124,25 +126,28 @@ class Deforum:
                 else:
                     prompt_series[int(numexpr.evaluate(i))] = prompt
             prompt_series = prompt_series.ffill().bfill()
-
+        self.prompt_series = prompt_series
         # check for video inits
         using_vid_init = self.anim_args.animation_mode == 'Video Input'
 
         # load depth model for 3D
-        predict_depths = (self.anim_args.animation_mode == '3D' and self.anim_args.use_depth_warping) or self.anim_args.save_depth_maps
+        predict_depths = (
+                                     self.anim_args.animation_mode == '3D' and self.anim_args.use_depth_warping) or self.anim_args.save_depth_maps
         predict_depths = predict_depths or (
-                    self.anim_args.hybrid_composite and self.anim_args.hybrid_comp_mask_type in ['Depth', 'Video Depth'])
+                self.anim_args.hybrid_composite and self.anim_args.hybrid_comp_mask_type in ['Depth', 'Video Depth'])
         if predict_depths:
             if self.opts is not None:
                 self.keep_in_vram = self.opts.data.get("deforum_keep_3d_models_in_vram")
             else:
                 self.keep_in_vram = True
 
-            #device = ('cpu' if cmd_opts.lowvram or cmd_opts.medvram else self.root.device)
-            #TODO Set device in root in webui
+            # device = ('cpu' if cmd_opts.lowvram or cmd_opts.medvram else self.root.device)
+            # TODO Set device in root in webui
             device = self.root.device
-            depth_model = DepthModel(self.root.models_path, device, self.root.half_precision, keep_in_vram=self.keep_in_vram,
-                                     depth_algorithm=self.anim_args.depth_algorithm, Width=self.args.W, Height=self.args.H,
+            depth_model = DepthModel(self.root.models_path, device, self.root.half_precision,
+                                     keep_in_vram=self.keep_in_vram,
+                                     depth_algorithm=self.anim_args.depth_algorithm, Width=self.args.W,
+                                     Height=self.args.H,
                                      midas_weight=self.anim_args.midas_weight)
 
             # depth-based hybrid composite mask requires saved depth maps
@@ -210,8 +215,9 @@ class Deforum:
         # Made to solve https://github.com/deforum-art/deforum-for-automatic1111-webui/issues/386
         if self.anim_args.use_mask_video:
 
-            self.args.mask_file = get_mask_from_file(get_next_frame(self.args.outdir, self.anim_args.video_mask_path, frame_idx, True),
-                                                self.args)
+            self.args.mask_file = get_mask_from_file(
+                get_next_frame(self.args.outdir, self.anim_args.video_mask_path, frame_idx, True),
+                self.args)
             self.root.noise_mask = get_mask_from_file(
                 get_next_frame(self.args.outdir, self.anim_args.video_mask_path, frame_idx, True), self.args)
 
@@ -230,19 +236,19 @@ class Deforum:
             color_match_sample = cv2.cvtColor(np.array(color_match_sample), cv2.COLOR_RGB2BGR)
 
         # Webui
-        done = self.datacallback({"max_frames":self.anim_args.max_frames})
-
-        #state.job_count = self.anim_args.max_frames
+        done = self.datacallback({"max_frames": self.anim_args.max_frames})
+        prev_flow = None
+        # state.job_count = self.anim_args.max_frames
 
         while frame_idx < self.anim_args.max_frames:
             # Webui
 
-            done = self.datacallback({"job":f"frame {frame_idx + 1}/{self.anim_args.max_frames}",
-                               "job_no":frame_idx + 1})
-            #state.job = f"frame {frame_idx + 1}/{self.anim_args.max_frames}"
-            #state.job_no = frame_idx + 1
+            done = self.datacallback({"job": f"frame {frame_idx + 1}/{self.anim_args.max_frames}",
+                                      "job_no": frame_idx + 1})
+            # state.job = f"frame {frame_idx + 1}/{self.anim_args.max_frames}"
+            # state.job_no = frame_idx + 1
 
-            #if state.skipped:
+            # if state.skipped:
             #    print("\n** PAUSED **")
             #    state.skipped = False
             #    while not state.skipped:
@@ -290,7 +296,8 @@ class Deforum:
                 scheduled_noise_multiplier = float(keys.noise_multiplier_schedule_series[frame_idx])
             if self.anim_args.enable_ddim_eta_scheduling and keys.ddim_eta_schedule_series[frame_idx] is not None:
                 scheduled_ddim_eta = float(keys.ddim_eta_schedule_series[frame_idx])
-            if self.anim_args.enable_ancestral_eta_scheduling and keys.ancestral_eta_schedule_series[frame_idx] is not None:
+            if self.anim_args.enable_ancestral_eta_scheduling and keys.ancestral_eta_schedule_series[
+                frame_idx] is not None:
                 scheduled_ancestral_eta = float(keys.ancestral_eta_schedule_series[frame_idx])
             if self.args.use_mask and keys.mask_schedule_series[frame_idx] is not None:
                 mask_seq = keys.mask_schedule_series[frame_idx]
@@ -301,8 +308,8 @@ class Deforum:
                 noise_mask_seq = mask_seq
 
             depth = None
-            done = self.datacallback({"webui":"sd_to_cpu"})
-            #if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
+            done = self.datacallback({"webui": "sd_to_cpu"})
+            # if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
             #    # Unload the main checkpoint and load the depth model
             #    lowvram.send_everything_to_cpu()
             #    sd_hijack.model_hijack.undo_hijack(sd_model)
@@ -325,9 +332,9 @@ class Deforum:
                 for tween_frame_idx in range(tween_frame_start_idx, frame_idx):
                     # update progress during cadence
                     done = self.datacallback({"job": f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}",
-                                       "job_no": tween_frame_idx + 1})
-                    #state.job = f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}"
-                    #state.job_no = tween_frame_idx + 1
+                                              "job_no": tween_frame_idx + 1})
+                    # state.job = f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}"
+                    # state.job_no = tween_frame_idx + 1
                     # cadence vars
                     tween = float(tween_frame_idx - tween_frame_start_idx + 1) / float(
                         frame_idx - tween_frame_start_idx)
@@ -341,6 +348,7 @@ class Deforum:
                                 cadence_flow = get_flow_from_images(turbo_prev_image, turbo_next_image,
                                                                     self.anim_args.optical_flow_cadence, raft_model) / 2
                                 turbo_next_image = image_transform_optical_flow(turbo_next_image, -cadence_flow, 1)
+                                prev_flow = cadence_flow
                     if self.opts is not None:
                         if self.opts.data.get("deforum_save_gen_info_as_srt"):
                             params_string = format_animation_params(keys, prompt_series, tween_frame_idx)
@@ -353,14 +361,17 @@ class Deforum:
 
                     if depth_model is not None:
                         assert (turbo_next_image is not None)
-                        depth = depth_model.predict(turbo_next_image, self.anim_args.midas_weight, self.root.half_precision)
+                        depth = depth_model.predict(turbo_next_image, self.anim_args.midas_weight,
+                                                    self.root.half_precision)
 
                     if advance_prev:
-                        turbo_prev_image, _ = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys, tween_frame_idx,
+                        turbo_prev_image, _ = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys,
+                                                              tween_frame_idx,
                                                               depth_model, depth=depth, device=self.root.device,
                                                               half_precision=self.root.half_precision)
                     if advance_next:
-                        turbo_next_image, _ = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys, tween_frame_idx,
+                        turbo_next_image, _ = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys,
+                                                              tween_frame_idx,
                                                               depth_model, depth=depth, device=self.root.device,
                                                               half_precision=self.root.half_precision)
 
@@ -368,7 +379,8 @@ class Deforum:
                     if tween_frame_idx > 0:
                         if self.anim_args.hybrid_motion in ['Affine', 'Perspective']:
                             if self.anim_args.hybrid_motion_use_prev_img:
-                                matrix = get_matrix_for_hybrid_motion_prev(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                matrix = get_matrix_for_hybrid_motion_prev(tween_frame_idx - 1,
+                                                                           (self.args.W, self.args.H),
                                                                            inputfiles, prev_img,
                                                                            self.anim_args.hybrid_motion)
                                 if advance_prev:
@@ -378,7 +390,8 @@ class Deforum:
                                     turbo_next_image = image_transform_ransac(turbo_next_image, matrix,
                                                                               self.anim_args.hybrid_motion)
                             else:
-                                matrix = get_matrix_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H), inputfiles,
+                                matrix = get_matrix_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                                                      inputfiles,
                                                                       self.anim_args.hybrid_motion)
                                 if advance_prev:
                                     turbo_prev_image = image_transform_ransac(turbo_prev_image, matrix,
@@ -405,7 +418,8 @@ class Deforum:
                                                                                         'flow_factor'])
                                 prev_flow = flow
                             else:
-                                flow = get_flow_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H), inputfiles,
+                                flow = get_flow_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                                                  inputfiles,
                                                                   hybrid_frame_path, prev_flow,
                                                                   self.anim_args.hybrid_flow_method, raft_model,
                                                                   self.anim_args.hybrid_flow_consistency,
@@ -424,9 +438,16 @@ class Deforum:
                     # do optical flow cadence after animation warping
                     if cadence_flow is not None:
                         cadence_flow = abs_flow_to_rel_flow(cadence_flow, self.args.W, self.args.H)
-                        cadence_flow, _ = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys, tween_frame_idx,
+                        cadence_flow, _ = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys,
+                                                          tween_frame_idx,
                                                           depth_model, depth=depth, device=self.root.device,
                                                           half_precision=self.root.half_precision)
+
+                        # test = True
+                        # if test:
+                        #    if prev_flow is not None:
+                        #        cadence_flow = make_consistency(prev_flow, cadence_flow)
+                        prev_flow = cadence_flow
                         cadence_flow_inc = rel_flow_to_abs_flow(cadence_flow, self.args.W, self.args.H) * tween
                         if advance_prev:
                             turbo_prev_image = image_transform_optical_flow(turbo_prev_image, cadence_flow_inc,
@@ -460,17 +481,20 @@ class Deforum:
                     # saving cadence frames
                     filename = f"{self.root.timestring}_{tween_frame_idx:09}.png"
                     im = img.copy()
-                    self.datacallback({"cadence_frame":Image.fromarray(cv2.cvtColor(im.astype("uint8"), cv2.COLOR_BGR2RGB))})
+                    self.datacallback(
+                        {"cadence_frame": Image.fromarray(cv2.cvtColor(im.astype("uint8"), cv2.COLOR_BGR2RGB))})
 
                     cv2.imwrite(os.path.join(self.args.outdir, filename), img)
                     if self.anim_args.save_depth_maps:
-                        depth_model.save(os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{tween_frame_idx:09}.png"),
-                                         depth)
+                        depth_model.save(
+                            os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{tween_frame_idx:09}.png"),
+                            depth)
 
             # get color match for video outside of prev_img conditional
-            hybrid_available = self.anim_args.hybrid_composite != 'None' or self.anim_args.hybrid_motion in ['Optical Flow',
-                                                                                                   'Affine',
-                                                                                                   'Perspective']
+            hybrid_available = self.anim_args.hybrid_composite != 'None' or self.anim_args.hybrid_motion in [
+                'Optical Flow',
+                'Affine',
+                'Perspective']
             if self.anim_args.color_coherence == 'Video Input' and hybrid_available:
                 if int(frame_idx) % int(self.anim_args.color_coherence_video_every_N_frames) == 0:
                     prev_vid_img = Image.open(os.path.join(self.args.outdir, 'inputframes', get_frame_name(
@@ -482,18 +506,20 @@ class Deforum:
             # after 1st frame, prev_img exists
             if prev_img is not None:
                 # apply transforms to previous frame
-                prev_img, depth = anim_frame_warp(prev_img, self.args, self.anim_args, keys, frame_idx, depth_model, depth=None,
+                prev_img, depth = anim_frame_warp(prev_img, self.args, self.anim_args, keys, frame_idx, depth_model,
+                                                  depth=None,
                                                   device=self.root.device, half_precision=self.root.half_precision)
 
                 # do hybrid compositing before motion
                 if self.anim_args.hybrid_composite == 'Before Motion':
                     self.args, prev_img = hybrid_composite(self.args, self.anim_args, frame_idx, prev_img, depth_model,
-                                                      hybrid_comp_schedules, self.root)
+                                                           hybrid_comp_schedules, self.root)
 
                 # hybrid video motion - warps prev_img to match motion, usually to prepare for compositing
                 if self.anim_args.hybrid_motion in ['Affine', 'Perspective']:
                     if self.anim_args.hybrid_motion_use_prev_img:
-                        matrix = get_matrix_for_hybrid_motion_prev(frame_idx - 1, (self.args.W, self.args.H), inputfiles,
+                        matrix = get_matrix_for_hybrid_motion_prev(frame_idx - 1, (self.args.W, self.args.H),
+                                                                   inputfiles,
                                                                    prev_img, self.anim_args.hybrid_motion)
                     else:
                         matrix = get_matrix_for_hybrid_motion(frame_idx - 1, (self.args.W, self.args.H), inputfiles,
@@ -509,7 +535,8 @@ class Deforum:
                                                                self.anim_args.hybrid_comp_save_extra_frames)
                     else:
                         flow = get_flow_for_hybrid_motion(frame_idx - 1, (self.args.W, self.args.H), inputfiles,
-                                                          hybrid_frame_path, prev_flow, self.anim_args.hybrid_flow_method,
+                                                          hybrid_frame_path, prev_flow,
+                                                          self.anim_args.hybrid_flow_method,
                                                           raft_model,
                                                           self.anim_args.hybrid_flow_consistency,
                                                           self.anim_args.hybrid_consistency_blur,
@@ -520,7 +547,7 @@ class Deforum:
                 # do hybrid compositing after motion (normal)
                 if self.anim_args.hybrid_composite == 'Normal':
                     self.args, prev_img = hybrid_composite(self.args, self.anim_args, frame_idx, prev_img, depth_model,
-                                                      hybrid_comp_schedules, self.root)
+                                                           hybrid_comp_schedules, self.root)
 
                 # apply color matching
                 if self.anim_args.color_coherence != 'None':
@@ -542,11 +569,13 @@ class Deforum:
                                                   mask_image if self.args.use_mask else None)
                 # apply frame noising
                 if self.args.use_mask or self.anim_args.use_noise_mask:
-                    self.root.noise_mask = compose_mask_with_check(self.root, self.args, noise_mask_seq, noise_mask_vals,
-                                                              Image.fromarray(
-                                                                  cv2.cvtColor(contrast_image, cv2.COLOR_BGR2RGB)))
+                    self.root.noise_mask = compose_mask_with_check(self.root, self.args, noise_mask_seq,
+                                                                   noise_mask_vals,
+                                                                   Image.fromarray(
+                                                                       cv2.cvtColor(contrast_image, cv2.COLOR_BGR2RGB)))
                 noised_image = add_noise(contrast_image, noise, self.args.seed, self.anim_args.noise_type,
-                                         (self.anim_args.perlin_w, self.anim_args.perlin_h, self.anim_args.perlin_octaves,
+                                         (self.anim_args.perlin_w, self.anim_args.perlin_h,
+                                          self.anim_args.perlin_octaves,
                                           self.anim_args.perlin_persistence),
                                          self.root.noise_mask, self.args.invert_mask)
 
@@ -602,7 +631,7 @@ class Deforum:
 
             if self.args.use_mask:
                 self.args.mask_image = compose_mask_with_check(self.root, self.args, mask_seq, mask_vals,
-                                                          self.root.init_sample) if self.root.init_sample is not None else None  # we need it only after the first frame anyway
+                                                               self.root.init_sample) if self.root.init_sample is not None else None  # we need it only after the first frame anyway
 
             # setting up some arguments for the looper
             self.loop_args.imageStrength = loopSchedulesAndData.image_strength_schedule_series[frame_idx]
@@ -624,8 +653,8 @@ class Deforum:
                     self.opts.data["eta_ddim"] = scheduled_ddim_eta
                 if scheduled_ancestral_eta is not None:
                     self.opts.data["eta_ancestral"] = scheduled_ancestral_eta
-            self.datacallback({"webui":"sd_to_gpu"})
-            #if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
+            self.datacallback({"webui": "sd_to_gpu"})
+            # if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
             #    if predict_depths: depth_model.to('cpu')
             #    devices.torch_gc()
             #    lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
@@ -637,8 +666,9 @@ class Deforum:
                     f"Optical flow redo is diffusing and warping using {self.anim_args.optical_flow_redo_generation} optical flow before generation.")
                 stored_seed = self.args.seed
                 self.args.seed = random.randint(0, 2 ** 32 - 1)
-                disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args, self.root, frame_idx,
-                                            sampler_name=scheduled_sampler_name)
+                disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args,
+                                                 self.root, frame_idx,
+                                                 sampler_name=scheduled_sampler_name)
                 disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
                 disposable_flow = get_flow_from_images(prev_img, disposable_image,
                                                        self.anim_args.optical_flow_redo_generation, raft_model)
@@ -657,8 +687,9 @@ class Deforum:
                 for n in range(0, int(self.anim_args.diffusion_redo)):
                     print(f"Redo generation {n + 1} of {int(self.anim_args.diffusion_redo)} before final generation")
                     self.args.seed = random.randint(0, 2 ** 32 - 1)
-                    disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args, self.root, frame_idx,
-                                                sampler_name=scheduled_sampler_name)
+                    disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args,
+                                                     self.controlnet_args, self.root, frame_idx,
+                                                     sampler_name=scheduled_sampler_name)
                     disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
                     # color match on last one only
                     if n == int(self.anim_args.diffusion_redo):
@@ -671,8 +702,9 @@ class Deforum:
                 gc.collect()
 
             # generation
-            image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args, self.root, frame_idx,
-                             sampler_name=scheduled_sampler_name)
+            image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args, self.root,
+                                  frame_idx,
+                                  sampler_name=scheduled_sampler_name)
 
             if image is None:
                 break
@@ -680,8 +712,9 @@ class Deforum:
             # do hybrid video after generation
             if frame_idx > 0 and self.anim_args.hybrid_composite == 'After Generation':
                 image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-                self.args, image = hybrid_composite(self.args, self.anim_args, frame_idx, image, depth_model, hybrid_comp_schedules,
-                                               self.root)
+                self.args, image = hybrid_composite(self.args, self.anim_args, frame_idx, image, depth_model,
+                                                    hybrid_comp_schedules,
+                                                    self.root)
                 image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
             # color matching on first frame is after generation, color match was collected earlier, so we do an extra generation to avoid the corruption introduced by the color match of first output
@@ -706,8 +739,9 @@ class Deforum:
 
             # on strength 0, set color match to generation
             if ((not self.anim_args.legacy_colormatch and not self.args.use_init) or (
-                    self.anim_args.legacy_colormatch and strength == 0)) and not self.anim_args.color_coherence in ['Image',
-                                                                                                          'Video Input']:
+                    self.anim_args.legacy_colormatch and strength == 0)) and not self.anim_args.color_coherence in [
+                'Image',
+                'Video Input']:
                 color_match_sample = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
             opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
@@ -723,17 +757,18 @@ class Deforum:
                 save_image(image, 'PIL', filename, self.args, self.video_args, self.root)
 
                 if self.anim_args.save_depth_maps:
-                    done = self.datacallback({"webui":"sd_to_cpu"})
-                    #if cmd_opts.lowvram or cmd_opts.medvram:
+                    done = self.datacallback({"webui": "sd_to_cpu"})
+                    # if cmd_opts.lowvram or cmd_opts.medvram:
                     #    lowvram.send_everything_to_cpu()
                     #    sd_hijack.model_hijack.undo_hijack(sd_model)
                     #    devices.torch_gc()
                     #    depth_model.to(self.root.device)
                     depth = depth_model.predict(opencv_image, self.anim_args.midas_weight, self.root.half_precision)
-                    depth_model.save(os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{frame_idx:09}.png"), depth)
-                    done = self.datacallback({"webui":"sd_to_cpu"})
+                    depth_model.save(os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{frame_idx:09}.png"),
+                                     depth)
+                    done = self.datacallback({"webui": "sd_to_cpu"})
 
-                    #if cmd_opts.lowvram or cmd_opts.medvram:
+                    # if cmd_opts.lowvram or cmd_opts.medvram:
                     #    depth_model.to('cpu')
                     #    devices.torch_gc()
                     #    lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
@@ -741,7 +776,7 @@ class Deforum:
                 frame_idx += 1
             done = self.datacallback({"image": image})
 
-            #state.current_image = image
+            # state.current_image = image
 
             self.args.seed = next_seed(self.args, self.root)
 
