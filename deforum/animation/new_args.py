@@ -1163,10 +1163,10 @@ def process_args(args_dict_main, run_id):
         args.use_init = True
 
     current_arg_list = [args, anim_args, video_args, parseq_args, root]
-    full_base_folder_path = os.path.join(os.getcwd(), p.outpath_samples)
+    #full_base_folder_path = os.path.join(os.getcwd(), p.outpath_samples)
     root.raw_batch_name = args.batch_name
-    args.batch_name = substitute_placeholders(args.batch_name, current_arg_list, full_base_folder_path)
-    args.outdir = os.path.join(p.outpath_samples, str(args.batch_name))
+    #args.batch_name = substitute_placeholders(args.batch_name, current_arg_list, full_base_folder_path)
+    #args.outdir = os.path.join(p.outpath_samples, str(args.batch_name))
     args.outdir = os.path.join(os.getcwd(), args.outdir)
     os.makedirs(args.outdir, exist_ok=True)
 

@@ -791,7 +791,10 @@ class Deforum:
         return None
 
     def generate(self, args, keys, anim_args, loop_args, controlnet_args, root, frame_idx, sampler_name):
-        return None
+
+        image = Image.new("RGB", (256,256))
+
+        return image
 
     def save_settings_from_animation_run(args, anim_args, parseq_args, loop_args, controlnet_args, video_args, root,
                                          full_out_file_path=None):

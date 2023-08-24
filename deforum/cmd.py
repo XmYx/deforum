@@ -1,6 +1,9 @@
 
 import json
 import os, sys
+from types import SimpleNamespace
+
+from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, ParseqArgs, LoopArgs, RootArgs
 
 print(os.getcwd())
 
@@ -33,21 +36,23 @@ def DeforumAnimPrompts():
     """
 
 
+def extract_values(args):
+
+    return {key: value['value'] for key, value in args.items()}
 
 def main():
-    print("Deforum Generator Test")
 
-
-
-    deforum = Deforum()
-
+    args = SimpleNamespace(**extract_values(DeforumArgs()))
+    anim_args = SimpleNamespace(**extract_values(DeforumAnimArgs()))
+    parseg_args = SimpleNamespace(**extract_values(ParseqArgs()))
+    loop_args = SimpleNamespace(**extract_values(LoopArgs()))
+    root = SimpleNamespace(**RootArgs())
+    video_args = None
+    controlnet_args = None
+    deforum = Deforum(args, anim_args, video_args, parseg_args, loop_args, controlnet_args, root)
     setattr(deforum.loop_args, "init_images", "")
-
-
     animation_prompts = DeforumAnimPrompts()
-
     deforum.root.animation_prompts = json.loads(animation_prompts)
-
     deforum.animation_prompts = deforum.root.animation_prompts
     deforum.args.timestring = time.strftime('%Y%m%d%H%M%S')
     current_arg_list = [deforum.args, deforum.anim_args, deforum.video_args, deforum.parseq_args]
@@ -55,14 +60,12 @@ def main():
     deforum.root.raw_batch_name = deforum.args.batch_name
     deforum.args.batch_name = substitute_placeholders(deforum.args.batch_name, current_arg_list, full_base_folder_path)
     deforum.args.outdir = os.path.join(full_base_folder_path, str(deforum.args.batch_name))
-
     if deforum.args.seed == -1 or deforum.args.seed == "-1":
         setattr(deforum.args, "seed", secrets.randbelow(999999999999999999))
         setattr(deforum.root, "raw_seed", int(deforum.args.seed))
         setattr(deforum.args, "seed_internal", 0)
     else:
         deforum.args.seed = int(deforum.args.seed)
-
     success = deforum()
 
 
