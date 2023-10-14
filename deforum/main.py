@@ -341,10 +341,14 @@ class Deforum:
             # after 1st frame, prev_img exists
             if prev_img is not None:
                 # apply transforms to previous frame
-                prev_img, depth = anim_frame_warp(prev_img, self.args, self.anim_args, keys, frame_idx, depth_model,
+                prev_img, depth,  mask = anim_frame_warp(prev_img, self.args, self.anim_args, keys, frame_idx, depth_model,
                                                   depth=None,
                                                   device=self.root.device, half_precision=self.root.half_precision)
-
+                if mask is not None:
+                    prev_img = self.generate_inpaint(self.args, keys, self.anim_args, self.loop_args,
+                                  self.controlnet_args, self.root, frame_idx,
+                                  sampler_name=scheduled_sampler_name, image=prev_img, mask=mask)
+                    #prev_img = cv2.cvtColor(prev_img, cv2.COLOR_BGR2RGB)
                 # do hybrid compositing before motion
                 if self.anim_args.hybrid_composite == 'Before Motion':
                     self.args, prev_img = hybrid_composite(self.args, self.anim_args, frame_idx, prev_img, depth_model,
@@ -580,6 +584,8 @@ class Deforum:
         image = Image.new("RGB", (256,256))
 
         return image
+    def generate_inpaint(self, args, keys, anim_args, loop_args, controlnet_args, root, frame_idx, sampler_name, image=None, mask=None):
+        return image
 
     def save_settings_from_animation_run(args, anim_args, parseq_args, loop_args, controlnet_args, video_args, root,
                                          full_out_file_path=None):
@@ -629,15 +635,24 @@ class Deforum:
                                             self.root.half_precision)
 
             if advance_prev:
-                turbo_prev_image, _ = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys,
+                turbo_prev_image, _, mask = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys,
                                                       tween_frame_idx,
                                                       depth_model, depth=depth, device=self.root.device,
                                                       half_precision=self.root.half_precision)
+                if mask is not None:
+                    turbo_prev_image = self.generate_inpaint(self.args, keys, self.anim_args, self.loop_args,
+                                  self.controlnet_args, self.root, frame_idx,
+                                  sampler_name=None, image=turbo_prev_image, mask=mask)
+
             if advance_next:
-                turbo_next_image, _ = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys,
+                turbo_next_image, _, mask = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys,
                                                       tween_frame_idx,
                                                       depth_model, depth=depth, device=self.root.device,
                                                       half_precision=self.root.half_precision)
+                if mask is not None:
+                    turbo_next_image = self.generate_inpaint(self.args, keys, self.anim_args, self.loop_args,
+                                  self.controlnet_args, self.root, frame_idx,
+                                  sampler_name=None, image=turbo_next_image, mask=mask)
 
             # hybrid video motion - warps turbo_prev_image or turbo_next_image to match motion
             if tween_frame_idx > 0:
@@ -702,10 +717,15 @@ class Deforum:
             # do optical flow cadence after animation warping
             if cadence_flow is not None:
                 cadence_flow = abs_flow_to_rel_flow(cadence_flow, self.args.W, self.args.H)
-                cadence_flow, _ = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys,
+                cadence_flow, _, mask = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys,
                                                   tween_frame_idx,
                                                   depth_model, depth=depth, device=self.root.device,
                                                   half_precision=self.root.half_precision)
+                # if mask is not None:
+                #     cadence_flow = self.generate_inpaint(self.args, keys, self.anim_args, self.loop_args,
+                #                   self.controlnet_args, self.root, frame_idx,
+                #                   sampler_name=None, image=cadence_flow, mask=mask)
+
 
                 prev_flow = cadence_flow
                 cadence_flow_inc = rel_flow_to_abs_flow(cadence_flow, self.args.W, self.args.H) * tween

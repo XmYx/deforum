@@ -160,7 +160,7 @@ def flip_3d_perspective(anim_args, prev_img_cv2, keys, frame_idx):
     )
 
 def anim_frame_warp(prev_img_cv2, args, anim_args, keys, frame_idx, depth_model=None, depth=None, device='cuda', half_precision = False):
-
+    mask = None
     if anim_args.use_depth_warping:
         if depth is None and depth_model is not None:
             depth = depth_model.predict(prev_img_cv2, anim_args.midas_weight, half_precision)
@@ -171,9 +171,9 @@ def anim_frame_warp(prev_img_cv2, args, anim_args, keys, frame_idx, depth_model=
     if anim_args.animation_mode == '2D':
         prev_img = anim_frame_warp_2d(prev_img_cv2, args, anim_args, keys, frame_idx)
     else: # '3D'
-        prev_img = anim_frame_warp_3d(device, prev_img_cv2, depth, anim_args, keys, frame_idx)
+        prev_img, mask = anim_frame_warp_3d(device, prev_img_cv2, depth, anim_args, keys, frame_idx)
                 
-    return prev_img, depth
+    return prev_img, depth, mask
 
 def anim_frame_warp_2d(prev_img_cv2, args, anim_args, keys, frame_idx):
     angle = keys.angle_series[frame_idx]
@@ -214,9 +214,9 @@ def anim_frame_warp_3d(device, prev_img_cv2, depth, anim_args, keys, frame_idx):
     if anim_args.enable_perspective_flip:
         prev_img_cv2 = flip_3d_perspective(anim_args, prev_img_cv2, keys, frame_idx)
     rot_mat = p3d.euler_angles_to_matrix(torch.tensor(rotate_xyz, device=device), "XYZ").unsqueeze(0)
-    result = transform_image_3d_switcher(torch.device('cuda'), prev_img_cv2, depth, rot_mat, translate_xyz, anim_args, keys, frame_idx)
+    result, mask = transform_image_3d_switcher(torch.device('cuda'), prev_img_cv2, depth, rot_mat, translate_xyz, anim_args, keys, frame_idx)
     torch.cuda.empty_cache()
-    return result
+    return result, mask
 
 def transform_image_3d_switcher(device, prev_img_cv2, depth_tensor, rot_mat, translate, anim_args, keys, frame_idx):
     if anim_args.depth_algorithm.lower() in ['midas+adabins (old)', 'zoe+adabins (old)']:
@@ -271,7 +271,7 @@ def transform_image_3d_legacy(device, prev_img_cv2, depth_tensor, rot_mat, trans
         new_image.squeeze().clamp(0,255), 
         'c h w -> h w c'
     ).cpu().numpy().astype(prev_img_cv2.dtype)
-    return result
+    return result, None
 
 def transform_image_3d_new(device, prev_img_cv2, depth_tensor, rot_mat, translate, anim_args, keys, frame_idx):
     '''
@@ -363,20 +363,37 @@ def transform_image_3d_new(device, prev_img_cv2, depth_tensor, rot_mat, translat
 
     # do the hyperdimensional remap
     image_tensor = rearrange(torch.from_numpy(prev_img_cv2.astype(np.float32)), 'h w c -> c h w').to(device)
+    # if anim_args.padding_mode == "zeros":
+    #     image_tensor[image_tensor == 0] += 1e-5
     new_image = torch.nn.functional.grid_sample(
-        image_tensor.unsqueeze(0),  # image_tensor.add(1/512 - 0.0001).unsqueeze(0), 
-        offset_coords_2d, 
-        mode=anim_args.sampling_mode, 
-        padding_mode=anim_args.padding_mode, 
+        image_tensor.unsqueeze(0),  # image_tensor.add(1/512 - 0.0001).unsqueeze(0),
+        offset_coords_2d,
+        mode=anim_args.sampling_mode,
+        padding_mode=anim_args.padding_mode,
         align_corners=False
     )
+    #
+    # new_image = torch.nn.functional.grid_sample(
+    #     image_tensor.add(1/512 - 0.0001).unsqueeze(0),
+    #     offset_coords_2d,
+    #     mode='bicubic',
+    #     padding_mode='zeros',
+    #     align_corners=False
+    # )
 
+
+    if anim_args.padding_mode == "zeros":
+        mask = (new_image.abs() < 1e-5).float()
+        #print(mask.shape)
+
+    else:
+        mask = None
     # convert back to cv2 style numpy array
     result = rearrange(
         new_image.squeeze().clamp(0,255), 
         'c h w -> h w c'
     ).cpu().numpy().astype(prev_img_cv2.dtype)
-    return result
+    return result, mask
 
 def prepare_depth_tensor(depth_tensor=None):
     # Prepares a depth tensor with normalization & equalization between 0 and 1
