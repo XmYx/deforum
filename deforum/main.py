@@ -54,7 +54,11 @@ class Deforum:
         self.opts = opts
         self.state = state
 
-    def __call__(self, *args, **kwargs):
+    def run_pre_checks(self):
+        srt_filename = None
+        srt_frame_duration = None
+        hybrid_frame_path = None
+        prev_flow = None
         if self.opts is not None:
             if self.opts.data.get("deforum_save_gen_info_as_srt",
                                   False):  # create .srt file and set timeframe mechanism using FPS
@@ -71,7 +75,6 @@ class Deforum:
             # initialize prev_flow
             if self.anim_args.hybrid_motion == 'Optical Flow':
                 prev_flow = None
-
             if self.loop_args.use_looper:
                 print(
                     "Using Guided Images mode: seed_behavior will be set to 'schedule' and 'strength_0_no_init' to False")
@@ -81,11 +84,33 @@ class Deforum:
                 self.args.seed_behavior = "schedule"
                 if not isJson(self.loop_args.init_images):
                     raise RuntimeError("The images set for use with keyframe-guidance are not in a proper JSON format")
-
         # handle controlnet video input frames generation
         self.handle_controlnet(self.args, self.anim_args, self.controlnet_args)
         # if is_controlnet_enabled(self.controlnet_args):
         #    unpack_controlnet_vids(self.args, self.anim_args, self.controlnet_args)
+        # create output folder for the batch
+        os.makedirs(self.args.outdir, exist_ok=True)
+        print(f"Saving animation frames to:\n{self.args.outdir}")
+
+        # save settings.txt file for the current run
+        self.save_settings_from_animation_run(self.args, self.anim_args, self.parseq_args, self.loop_args,
+                                              self.controlnet_args, self.video_args, self.root)
+        # resume from timestring
+        if self.anim_args.resume_from_timestring:
+            self.root.timestring = self.anim_args.resume_timestring
+        return srt_filename, srt_frame_duration, hybrid_frame_path, prev_flow
+    def __call__(self, *args, **kwargs):
+
+        cadence_flow = None
+        srt_filename = None
+        srt_frame_duration = None
+        raft_model = None
+        inputfiles = None
+        hybrid_frame_path = None
+        hybrid_comp_schedules = None
+        cadence_flow_factor = None
+
+        srt_filename, srt_frame_duration, hybrid_frame_path, prev_flow = self.run_pre_checks()
 
         # use parseq if manifest is provided
         if self.parseq_args is not None:
@@ -94,27 +119,13 @@ class Deforum:
             use_parseq = False
         # expand key frame strings to values
         keys = DeformAnimKeys(self.anim_args, self.args.seed) if not use_parseq else ParseqAnimKeys(self.parseq_args,
-                                                                                                    self.anim_args,
                                                                                                     self.video_args)
         loopSchedulesAndData = LooperAnimKeys(self.loop_args, self.anim_args, self.args.seed)
-
-        # create output folder for the batch
-        os.makedirs(self.args.outdir, exist_ok=True)
-        print(f"Saving animation frames to:\n{self.args.outdir}")
-
-        # save settings.txt file for the current run
-        self.save_settings_from_animation_run(self.args, self.anim_args, self.parseq_args, self.loop_args,
-                                              self.controlnet_args, self.video_args, self.root)
-
-        # resume from timestring
-        if self.anim_args.resume_from_timestring:
-            self.root.timestring = self.anim_args.resume_timestring
 
         # Always enable pseudo-3d with parseq. No need for an extra toggle:
         # Whether it's used or not in practice is defined by the schedules
         if use_parseq:
             self.anim_args.flip_2d_perspective = True
-
             # expand prompts out to per-frame
         if use_parseq and keys.manages_prompts():
             prompt_series = keys.prompts
@@ -140,7 +151,6 @@ class Deforum:
                 self.keep_in_vram = self.opts.data.get("deforum_keep_3d_models_in_vram")
             else:
                 self.keep_in_vram = True
-
             # device = ('cpu' if cmd_opts.lowvram or cmd_opts.medvram else self.root.device)
             # TODO Set device in root in webui
             device = self.root.device
@@ -231,9 +241,7 @@ class Deforum:
 
         # get color match for 'Image' color coherence only once, before loop
         if self.anim_args.color_coherence == 'Image':
-            color_match_sample = load_image(self.anim_args.color_coherence_image_path)
-            color_match_sample = color_match_sample.resize((self.args.W, self.args.H), PIL.Image.LANCZOS)
-            color_match_sample = cv2.cvtColor(np.array(color_match_sample), cv2.COLOR_RGB2BGR)
+            color_match_sample = self.get_color_match_sample(self.anim_args.color_coherence_image_path)
 
         # Webui
         done = self.datacallback({"max_frames": self.anim_args.max_frames})
@@ -245,15 +253,6 @@ class Deforum:
 
             done = self.datacallback({"job": f"frame {frame_idx + 1}/{self.anim_args.max_frames}",
                                       "job_no": frame_idx + 1})
-            # state.job = f"frame {frame_idx + 1}/{self.anim_args.max_frames}"
-            # state.job_no = frame_idx + 1
-
-            # if state.skipped:
-            #    print("\n** PAUSED **")
-            #    state.skipped = False
-            #    while not state.skipped:
-            #        time.sleep(0.1)
-            #    print("** RESUMING **")
 
             print(f"\033[36mAnimation frame: \033[0m{frame_idx}/{self.anim_args.max_frames}  ")
 
@@ -309,13 +308,6 @@ class Deforum:
 
             depth = None
             done = self.datacallback({"webui": "sd_to_cpu"})
-            # if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
-            #    # Unload the main checkpoint and load the depth model
-            #    lowvram.send_everything_to_cpu()
-            #    sd_hijack.model_hijack.undo_hijack(sd_model)
-            #    devices.torch_gc()
-            #
-            #    if predict_depths: depth_model.to(self.root.device)
             if self.anim_args.animation_mode == '3D':
                 if predict_depths: depth_model.to(self.root.device)
             if self.opts is not None:
@@ -324,171 +316,15 @@ class Deforum:
                     write_frame_subtitle(srt_filename, frame_idx, srt_frame_duration,
                                          f"F#: {frame_idx}; Cadence: false; Seed: {self.args.seed}; {params_string}")
                     params_string = None
+            tween_frame_start_idx = max(start_frame, frame_idx - turbo_steps)
 
             # emit in-between frames
             if turbo_steps > 1:
-                tween_frame_start_idx = max(start_frame, frame_idx - turbo_steps)
-                cadence_flow = None
-                for tween_frame_idx in range(tween_frame_start_idx, frame_idx):
-                    # update progress during cadence
-                    done = self.datacallback({"job": f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}",
-                                              "job_no": tween_frame_idx + 1})
-                    # state.job = f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}"
-                    # state.job_no = tween_frame_idx + 1
-                    # cadence vars
-                    tween = float(tween_frame_idx - tween_frame_start_idx + 1) / float(
-                        frame_idx - tween_frame_start_idx)
-                    advance_prev = turbo_prev_image is not None and tween_frame_idx > turbo_prev_frame_idx
-                    advance_next = tween_frame_idx > turbo_next_frame_idx
-
-                    # optical flow cadence setup before animation warping
-                    if self.anim_args.animation_mode in ['2D', '3D'] and self.anim_args.optical_flow_cadence != 'None':
-                        if keys.strength_schedule_series[tween_frame_start_idx] > 0:
-                            if cadence_flow is None and turbo_prev_image is not None and turbo_next_image is not None:
-                                cadence_flow = get_flow_from_images(turbo_prev_image, turbo_next_image,
-                                                                    self.anim_args.optical_flow_cadence, raft_model) / 2
-                                turbo_next_image = image_transform_optical_flow(turbo_next_image, -cadence_flow, 1)
-                                prev_flow = cadence_flow
-                    if self.opts is not None:
-                        if self.opts.data.get("deforum_save_gen_info_as_srt"):
-                            params_string = format_animation_params(keys, prompt_series, tween_frame_idx)
-                            write_frame_subtitle(srt_filename, tween_frame_idx, srt_frame_duration,
-                                                 f"F#: {tween_frame_idx}; Cadence: {tween < 1.0}; Seed: {self.args.seed}; {params_string}")
-                            params_string = None
-
-                    print(
-                        f"Creating in-between {'' if cadence_flow is None else self.anim_args.optical_flow_cadence + ' optical flow '}cadence frame: {tween_frame_idx}; tween:{tween:0.2f};")
-
-                    if depth_model is not None:
-                        assert (turbo_next_image is not None)
-                        depth = depth_model.predict(turbo_next_image, self.anim_args.midas_weight,
-                                                    self.root.half_precision)
-
-                    if advance_prev:
-                        turbo_prev_image, _ = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys,
-                                                              tween_frame_idx,
-                                                              depth_model, depth=depth, device=self.root.device,
-                                                              half_precision=self.root.half_precision)
-                    if advance_next:
-                        turbo_next_image, _ = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys,
-                                                              tween_frame_idx,
-                                                              depth_model, depth=depth, device=self.root.device,
-                                                              half_precision=self.root.half_precision)
-
-                    # hybrid video motion - warps turbo_prev_image or turbo_next_image to match motion
-                    if tween_frame_idx > 0:
-                        if self.anim_args.hybrid_motion in ['Affine', 'Perspective']:
-                            if self.anim_args.hybrid_motion_use_prev_img:
-                                matrix = get_matrix_for_hybrid_motion_prev(tween_frame_idx - 1,
-                                                                           (self.args.W, self.args.H),
-                                                                           inputfiles, prev_img,
-                                                                           self.anim_args.hybrid_motion)
-                                if advance_prev:
-                                    turbo_prev_image = image_transform_ransac(turbo_prev_image, matrix,
-                                                                              self.anim_args.hybrid_motion)
-                                if advance_next:
-                                    turbo_next_image = image_transform_ransac(turbo_next_image, matrix,
-                                                                              self.anim_args.hybrid_motion)
-                            else:
-                                matrix = get_matrix_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
-                                                                      inputfiles,
-                                                                      self.anim_args.hybrid_motion)
-                                if advance_prev:
-                                    turbo_prev_image = image_transform_ransac(turbo_prev_image, matrix,
-                                                                              self.anim_args.hybrid_motion)
-                                if advance_next:
-                                    turbo_next_image = image_transform_ransac(turbo_next_image, matrix,
-                                                                              self.anim_args.hybrid_motion)
-                        if self.anim_args.hybrid_motion in ['Optical Flow']:
-                            if self.anim_args.hybrid_motion_use_prev_img:
-                                flow = get_flow_for_hybrid_motion_prev(tween_frame_idx - 1, (self.args.W, self.args.H),
-                                                                       inputfiles, hybrid_frame_path, prev_flow,
-                                                                       prev_img, self.anim_args.hybrid_flow_method,
-                                                                       raft_model,
-                                                                       self.anim_args.hybrid_flow_consistency,
-                                                                       self.anim_args.hybrid_consistency_blur,
-                                                                       self.anim_args.hybrid_comp_save_extra_frames)
-                                if advance_prev:
-                                    turbo_prev_image = image_transform_optical_flow(turbo_prev_image, flow,
-                                                                                    hybrid_comp_schedules[
-                                                                                        'flow_factor'])
-                                if advance_next:
-                                    turbo_next_image = image_transform_optical_flow(turbo_next_image, flow,
-                                                                                    hybrid_comp_schedules[
-                                                                                        'flow_factor'])
-                                prev_flow = flow
-                            else:
-                                flow = get_flow_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
-                                                                  inputfiles,
-                                                                  hybrid_frame_path, prev_flow,
-                                                                  self.anim_args.hybrid_flow_method, raft_model,
-                                                                  self.anim_args.hybrid_flow_consistency,
-                                                                  self.anim_args.hybrid_consistency_blur,
-                                                                  self.anim_args.hybrid_comp_save_extra_frames)
-                                if advance_prev:
-                                    turbo_prev_image = image_transform_optical_flow(turbo_prev_image, flow,
-                                                                                    hybrid_comp_schedules[
-                                                                                        'flow_factor'])
-                                if advance_next:
-                                    turbo_next_image = image_transform_optical_flow(turbo_next_image, flow,
-                                                                                    hybrid_comp_schedules[
-                                                                                        'flow_factor'])
-                                prev_flow = flow
-
-                    # do optical flow cadence after animation warping
-                    if cadence_flow is not None:
-                        cadence_flow = abs_flow_to_rel_flow(cadence_flow, self.args.W, self.args.H)
-                        cadence_flow, _ = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys,
-                                                          tween_frame_idx,
-                                                          depth_model, depth=depth, device=self.root.device,
-                                                          half_precision=self.root.half_precision)
-
-                        # test = True
-                        # if test:
-                        #    if prev_flow is not None:
-                        #        cadence_flow = make_consistency(prev_flow, cadence_flow)
-                        prev_flow = cadence_flow
-                        cadence_flow_inc = rel_flow_to_abs_flow(cadence_flow, self.args.W, self.args.H) * tween
-                        if advance_prev:
-                            turbo_prev_image = image_transform_optical_flow(turbo_prev_image, cadence_flow_inc,
-                                                                            cadence_flow_factor)
-                        if advance_next:
-                            turbo_next_image = image_transform_optical_flow(turbo_next_image, cadence_flow_inc,
-                                                                            cadence_flow_factor)
-
-                    turbo_prev_frame_idx = turbo_next_frame_idx = tween_frame_idx
-
-                    if turbo_prev_image is not None and tween < 1.0:
-                        img = turbo_prev_image * (1.0 - tween) + turbo_next_image * tween
-                    else:
-                        img = turbo_next_image
-
-                    # intercept and override to grayscale
-                    if self.anim_args.color_force_grayscale:
-                        img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2GRAY)
-                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-                        # overlay mask
-                    if self.args.overlay_mask and (self.anim_args.use_mask_video or self.args.use_mask):
-                        img = do_overlay_mask(self.args, self.anim_args, img, tween_frame_idx, True)
-
-                    # get prev_img during cadence
-                    prev_img = img
-
-                    # current image update for cadence frames (left commented because it doesn't currently update the preview)
-                    # state.current_image = Image.fromarray(cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2RGB))
-
-                    # saving cadence frames
-                    filename = f"{self.root.timestring}_{tween_frame_idx:09}.png"
-                    im = img.copy()
-                    self.datacallback(
-                        {"cadence_frame": Image.fromarray(cv2.cvtColor(im.astype("uint8"), cv2.COLOR_BGR2RGB))})
-
-                    cv2.imwrite(os.path.join(self.args.outdir, filename), img)
-                    if self.anim_args.save_depth_maps:
-                        depth_model.save(
-                            os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{tween_frame_idx:09}.png"),
-                            depth)
+                turbo_prev_image, turbo_next_image, turbo_prev_frame_idx, turbo_next_frame_idx, cadence_flow, prev_flow, prev_img = (
+                    self.generate_in_between_frames(tween_frame_start_idx, frame_idx, turbo_prev_image, turbo_next_image,
+                                   turbo_prev_frame_idx, turbo_next_frame_idx, cadence_flow, prev_flow, prev_img,
+                                   raft_model, keys, prompt_series, srt_filename, srt_frame_duration,
+                                   depth_model, inputfiles, hybrid_frame_path, hybrid_comp_schedules, cadence_flow_factor))
 
             # get color match for video outside of prev_img conditional
             hybrid_available = self.anim_args.hybrid_composite != 'None' or self.anim_args.hybrid_motion in [
@@ -500,8 +336,7 @@ class Deforum:
                     prev_vid_img = Image.open(os.path.join(self.args.outdir, 'inputframes', get_frame_name(
                         self.anim_args.video_init_path) + f"{frame_idx:09}.jpg"))
                     prev_vid_img = prev_vid_img.resize((self.args.W, self.args.H), PIL.Image.LANCZOS)
-                    color_match_sample = np.asarray(prev_vid_img)
-                    color_match_sample = cv2.cvtColor(color_match_sample, cv2.COLOR_RGB2BGR)
+                    color_match_sample = self.get_color_match_sample(image=prev_vid_img)
 
             # after 1st frame, prev_img exists
             if prev_img is not None:
@@ -642,44 +477,13 @@ class Deforum:
             self.loop_args.use_looper = loopSchedulesAndData.use_looper
             self.loop_args.imagesToKeyframe = loopSchedulesAndData.imagesToKeyframe
             if self.opts is not None:
-                if 'img2img_fix_steps' in self.opts.data and self.opts.data[
-                    "img2img_fix_steps"]:  # disable "with img2img do exactly x steps" from general setting, as it *ruins* deforum animations
-                    self.opts.data["img2img_fix_steps"] = False
-                if scheduled_clipskip is not None:
-                    self.opts.data["CLIP_stop_at_last_layers"] = scheduled_clipskip
-                if scheduled_noise_multiplier is not None:
-                    self.opts.data["initial_noise_multiplier"] = scheduled_noise_multiplier
-                if scheduled_ddim_eta is not None:
-                    self.opts.data["eta_ddim"] = scheduled_ddim_eta
-                if scheduled_ancestral_eta is not None:
-                    self.opts.data["eta_ancestral"] = scheduled_ancestral_eta
+                self.run_opts_scheduler(scheduled_clipskip, scheduled_noise_multiplier, scheduled_ddim_eta, scheduled_ancestral_eta)
+
             self.datacallback({"webui": "sd_to_gpu"})
-            # if self.anim_args.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
-            #    if predict_depths: depth_model.to('cpu')
-            #    devices.torch_gc()
-            #    lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
-            #    sd_hijack.model_hijack.hijack(sd_model)
 
             # optical flow redo before generation
             if self.anim_args.optical_flow_redo_generation != 'None' and prev_img is not None and strength > 0:
-                print(
-                    f"Optical flow redo is diffusing and warping using {self.anim_args.optical_flow_redo_generation} optical flow before generation.")
-                stored_seed = self.args.seed
-                self.args.seed = random.randint(0, 2 ** 32 - 1)
-                disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args,
-                                                 self.root, frame_idx,
-                                                 sampler_name=scheduled_sampler_name)
-                disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
-                disposable_flow = get_flow_from_images(prev_img, disposable_image,
-                                                       self.anim_args.optical_flow_redo_generation, raft_model)
-                disposable_image = cv2.cvtColor(disposable_image, cv2.COLOR_BGR2RGB)
-                disposable_image = image_transform_optical_flow(disposable_image, disposable_flow, redo_flow_factor)
-                self.args.seed = stored_seed
-                print("SETTING INIT SAMPLE #2")
-
-                self.root.init_sample = Image.fromarray(disposable_image)
-                del (disposable_image, disposable_flow, stored_seed)
-                gc.collect()
+                self.root.init_sample = self.generate_disposable_image(keys, frame_idx, scheduled_sampler_name, prev_img, raft_model, redo_flow_factor)
 
             # diffusion redo
             if int(self.anim_args.diffusion_redo) > 0 and prev_img is not None and strength > 0:
@@ -705,10 +509,8 @@ class Deforum:
             image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args, self.root,
                                   frame_idx,
                                   sampler_name=scheduled_sampler_name)
-
             if image is None:
                 break
-
             # do hybrid video after generation
             if frame_idx > 0 and self.anim_args.hybrid_composite == 'After Generation':
                 image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
@@ -716,7 +518,6 @@ class Deforum:
                                                     hybrid_comp_schedules,
                                                     self.root)
                 image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
             # color matching on first frame is after generation, color match was collected earlier, so we do an extra generation to avoid the corruption introduced by the color match of first output
             if frame_idx == 0 and (self.anim_args.color_coherence == 'Image' or (
                     self.anim_args.color_coherence == 'Video Input' and hybrid_available)):
@@ -736,7 +537,6 @@ class Deforum:
             # overlay mask
             if self.args.overlay_mask and (self.anim_args.use_mask_video or self.args.use_mask):
                 image = do_overlay_mask(self.args, self.anim_args, image, frame_idx)
-
             # on strength 0, set color match to generation
             if ((not self.anim_args.legacy_colormatch and not self.args.use_init) or (
                     self.anim_args.legacy_colormatch and strength == 0)) and not self.anim_args.color_coherence in [
@@ -755,37 +555,22 @@ class Deforum:
             else:
                 filename = f"{self.root.timestring}_{frame_idx:09}.png"
                 save_image(image, 'PIL', filename, self.args, self.video_args, self.root)
-
                 if self.anim_args.save_depth_maps:
                     done = self.datacallback({"webui": "sd_to_cpu"})
-                    # if cmd_opts.lowvram or cmd_opts.medvram:
-                    #    lowvram.send_everything_to_cpu()
-                    #    sd_hijack.model_hijack.undo_hijack(sd_model)
-                    #    devices.torch_gc()
-                    #    depth_model.to(self.root.device)
                     depth = depth_model.predict(opencv_image, self.anim_args.midas_weight, self.root.half_precision)
                     depth_model.save(os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{frame_idx:09}.png"),
                                      depth)
                     done = self.datacallback({"webui": "sd_to_cpu"})
-
-                    # if cmd_opts.lowvram or cmd_opts.medvram:
-                    #    depth_model.to('cpu')
-                    #    devices.torch_gc()
-                    #    lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
-                    #    sd_hijack.model_hijack.hijack(sd_model)
                 frame_idx += 1
             done = self.datacallback({"image": image})
-
-            # state.current_image = image
-
             self.args.seed = next_seed(self.args, self.root)
-
+        self.cleanup(predict_depths, load_raft, depth_model, raft_model)
+        return True
+    def cleanup(self, predict_depths, load_raft, depth_model, raft_model):
         if predict_depths and not self.keep_in_vram:
             depth_model.delete_model()  # handles adabins too
-
         if load_raft:
             raft_model.delete_model()
-        return True
 
     def datacallback(self, data):
         return None
@@ -803,3 +588,192 @@ class Deforum:
     def handle_controlnet(self, args, anim_args, controlnet_args):
         print("DEFORUM DUMMY CONTROLNET HANDLER, REPLACE ME WITH YOUR UI's, or API's CONTROLNET HANDLER")
         return None
+
+    def generate_in_between_frames(self, tween_frame_start_idx, frame_idx, turbo_prev_image, turbo_next_image,
+                                   turbo_prev_frame_idx, turbo_next_frame_idx, cadence_flow, prev_flow, prev_img,
+                                   raft_model, keys, prompt_series, srt_filename, srt_frame_duration,
+                                   depth_model, inputfiles, hybrid_frame_path, hybrid_comp_schedules, cadence_flow_factor):  # Add other required static parameters
+        for tween_frame_idx in range(tween_frame_start_idx, frame_idx):
+            # update progress during cadence
+            done = self.datacallback({"job": f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}",
+                                      "job_no": tween_frame_idx + 1})
+            # state.job = f"frame {tween_frame_idx + 1}/{self.anim_args.max_frames}"
+            # state.job_no = tween_frame_idx + 1
+            # cadence vars
+            tween = float(tween_frame_idx - tween_frame_start_idx + 1) / float(
+                frame_idx - tween_frame_start_idx)
+            advance_prev = turbo_prev_image is not None and tween_frame_idx > turbo_prev_frame_idx
+            advance_next = tween_frame_idx > turbo_next_frame_idx
+
+            # optical flow cadence setup before animation warping
+            if self.anim_args.animation_mode in ['2D', '3D'] and self.anim_args.optical_flow_cadence != 'None':
+                if keys.strength_schedule_series[tween_frame_start_idx] > 0:
+                    if cadence_flow is None and turbo_prev_image is not None and turbo_next_image is not None:
+                        cadence_flow = get_flow_from_images(turbo_prev_image, turbo_next_image,
+                                                            self.anim_args.optical_flow_cadence, raft_model) / 2
+                        turbo_next_image = image_transform_optical_flow(turbo_next_image, -cadence_flow, 1)
+                        prev_flow = cadence_flow
+            if self.opts is not None:
+                if self.opts.data.get("deforum_save_gen_info_as_srt"):
+                    params_string = format_animation_params(keys, prompt_series, tween_frame_idx)
+                    write_frame_subtitle(srt_filename, tween_frame_idx, srt_frame_duration,
+                                         f"F#: {tween_frame_idx}; Cadence: {tween < 1.0}; Seed: {self.args.seed}; {params_string}")
+                    params_string = None
+
+            print(
+                f"Creating in-between {'' if cadence_flow is None else self.anim_args.optical_flow_cadence + ' optical flow '}cadence frame: {tween_frame_idx}; tween:{tween:0.2f};")
+
+            if depth_model is not None:
+                assert (turbo_next_image is not None)
+                depth = depth_model.predict(turbo_next_image, self.anim_args.midas_weight,
+                                            self.root.half_precision)
+
+            if advance_prev:
+                turbo_prev_image, _ = anim_frame_warp(turbo_prev_image, self.args, self.anim_args, keys,
+                                                      tween_frame_idx,
+                                                      depth_model, depth=depth, device=self.root.device,
+                                                      half_precision=self.root.half_precision)
+            if advance_next:
+                turbo_next_image, _ = anim_frame_warp(turbo_next_image, self.args, self.anim_args, keys,
+                                                      tween_frame_idx,
+                                                      depth_model, depth=depth, device=self.root.device,
+                                                      half_precision=self.root.half_precision)
+
+            # hybrid video motion - warps turbo_prev_image or turbo_next_image to match motion
+            if tween_frame_idx > 0:
+                if self.anim_args.hybrid_motion in ['Affine', 'Perspective']:
+                    if self.anim_args.hybrid_motion_use_prev_img:
+                        matrix = get_matrix_for_hybrid_motion_prev(tween_frame_idx - 1,
+                                                                   (self.args.W, self.args.H),
+                                                                   inputfiles, prev_img,
+                                                                   self.anim_args.hybrid_motion)
+                        if advance_prev:
+                            turbo_prev_image = image_transform_ransac(turbo_prev_image, matrix,
+                                                                      self.anim_args.hybrid_motion)
+                        if advance_next:
+                            turbo_next_image = image_transform_ransac(turbo_next_image, matrix,
+                                                                      self.anim_args.hybrid_motion)
+                    else:
+                        matrix = get_matrix_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                                              inputfiles,
+                                                              self.anim_args.hybrid_motion)
+                        if advance_prev:
+                            turbo_prev_image = image_transform_ransac(turbo_prev_image, matrix,
+                                                                      self.anim_args.hybrid_motion)
+                        if advance_next:
+                            turbo_next_image = image_transform_ransac(turbo_next_image, matrix,
+                                                                      self.anim_args.hybrid_motion)
+                if self.anim_args.hybrid_motion in ['Optical Flow']:
+                    if self.anim_args.hybrid_motion_use_prev_img:
+                        flow = get_flow_for_hybrid_motion_prev(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                                               inputfiles, hybrid_frame_path, prev_flow,
+                                                               prev_img, self.anim_args.hybrid_flow_method,
+                                                               raft_model,
+                                                               self.anim_args.hybrid_flow_consistency,
+                                                               self.anim_args.hybrid_consistency_blur,
+                                                               self.anim_args.hybrid_comp_save_extra_frames)
+                        if advance_prev:
+                            turbo_prev_image = image_transform_optical_flow(turbo_prev_image, flow,
+                                                                            hybrid_comp_schedules[
+                                                                                'flow_factor'])
+                        if advance_next:
+                            turbo_next_image = image_transform_optical_flow(turbo_next_image, flow,
+                                                                            hybrid_comp_schedules[
+                                                                                'flow_factor'])
+                        prev_flow = flow
+                    else:
+                        flow = get_flow_for_hybrid_motion(tween_frame_idx - 1, (self.args.W, self.args.H),
+                                                          inputfiles,
+                                                          hybrid_frame_path, prev_flow,
+                                                          self.anim_args.hybrid_flow_method, raft_model,
+                                                          self.anim_args.hybrid_flow_consistency,
+                                                          self.anim_args.hybrid_consistency_blur,
+                                                          self.anim_args.hybrid_comp_save_extra_frames)
+                        if advance_prev:
+                            turbo_prev_image = image_transform_optical_flow(turbo_prev_image, flow,
+                                                                            hybrid_comp_schedules[
+                                                                                'flow_factor'])
+                        if advance_next:
+                            turbo_next_image = image_transform_optical_flow(turbo_next_image, flow,
+                                                                            hybrid_comp_schedules[
+                                                                                'flow_factor'])
+                        prev_flow = flow
+
+            # do optical flow cadence after animation warping
+            if cadence_flow is not None:
+                cadence_flow = abs_flow_to_rel_flow(cadence_flow, self.args.W, self.args.H)
+                cadence_flow, _ = anim_frame_warp(cadence_flow, self.args, self.anim_args, keys,
+                                                  tween_frame_idx,
+                                                  depth_model, depth=depth, device=self.root.device,
+                                                  half_precision=self.root.half_precision)
+
+                prev_flow = cadence_flow
+                cadence_flow_inc = rel_flow_to_abs_flow(cadence_flow, self.args.W, self.args.H) * tween
+                if advance_prev:
+                    turbo_prev_image = image_transform_optical_flow(turbo_prev_image, cadence_flow_inc,
+                                                                    cadence_flow_factor)
+                if advance_next:
+                    turbo_next_image = image_transform_optical_flow(turbo_next_image, cadence_flow_inc,
+                                                                    cadence_flow_factor)
+            turbo_prev_frame_idx = turbo_next_frame_idx = tween_frame_idx
+            if turbo_prev_image is not None and tween < 1.0:
+                img = turbo_prev_image * (1.0 - tween) + turbo_next_image * tween
+            else:
+                img = turbo_next_image
+            # intercept and override to grayscale
+            if self.anim_args.color_force_grayscale:
+                img = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                # overlay mask
+            if self.args.overlay_mask and (self.anim_args.use_mask_video or self.args.use_mask):
+                img = do_overlay_mask(self.args, self.anim_args, img, tween_frame_idx, True)
+            # get prev_img during cadence
+            prev_img = img
+            # saving cadence frames
+            filename = f"{self.root.timestring}_{tween_frame_idx:09}.png"
+            im = img.copy()
+            self.datacallback(
+                {"cadence_frame": Image.fromarray(cv2.cvtColor(im.astype("uint8"), cv2.COLOR_BGR2RGB))})
+            cv2.imwrite(os.path.join(self.args.outdir, filename), img)
+            if self.anim_args.save_depth_maps:
+                depth_model.save(
+                    os.path.join(self.args.outdir, f"{self.root.timestring}_depth_{tween_frame_idx:09}.png"),
+                    depth)
+        return turbo_prev_image, turbo_next_image, turbo_prev_frame_idx, turbo_next_frame_idx, cadence_flow, prev_flow, prev_img
+    def get_color_match_sample(self, path=None, image=None):
+        if path is not None:
+            color_match_sample = load_image(path)
+            color_match_sample = color_match_sample.resize((self.args.W, self.args.H), PIL.Image.LANCZOS)
+        elif image is not None:
+            color_match_sample = np.asarray(prev_vid_img)
+        color_match_sample = cv2.cvtColor(np.array(color_match_sample), cv2.COLOR_RGB2BGR)
+        return color_match_sample
+
+    def run_opts_scheduler(self, scheduled_clipskip, scheduled_noise_multiplier, scheduled_ddim_eta, scheduled_ancestral_eta):
+        if 'img2img_fix_steps' in self.opts.data and self.opts.data[
+            "img2img_fix_steps"]:  # disable "with img2img do exactly x steps" from general setting, as it *ruins* deforum animations
+            self.opts.data["img2img_fix_steps"] = False
+        if scheduled_clipskip is not None:
+            self.opts.data["CLIP_stop_at_last_layers"] = scheduled_clipskip
+        if scheduled_noise_multiplier is not None:
+            self.opts.data["initial_noise_multiplier"] = scheduled_noise_multiplier
+        if scheduled_ddim_eta is not None:
+            self.opts.data["eta_ddim"] = scheduled_ddim_eta
+        if scheduled_ancestral_eta is not None:
+            self.opts.data["eta_ancestral"] = scheduled_ancestral_eta
+    def generate_disposable_image(self, keys, frame_idx, scheduled_sampler_name, prev_img, raft_model, redo_flow_factor):
+        print(
+            f"Optical flow redo is diffusing and warping using {self.anim_args.optical_flow_redo_generation} optical flow before generation.")
+        stored_seed = self.args.seed
+        self.args.seed = random.randint(0, 2 ** 32 - 1)
+        disposable_image = self.generate(self.args, keys, self.anim_args, self.loop_args, self.controlnet_args,
+                                         self.root, frame_idx,
+                                         sampler_name=scheduled_sampler_name)
+        disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
+        disposable_flow = get_flow_from_images(prev_img, disposable_image,
+                                               self.anim_args.optical_flow_redo_generation, raft_model)
+        disposable_image = cv2.cvtColor(disposable_image, cv2.COLOR_BGR2RGB)
+        disposable_image = image_transform_optical_flow(disposable_image, disposable_flow, redo_flow_factor)
+        self.args.seed = stored_seed
+        disposable_image = Image.fromarray(disposable_image)
+        return disposable_image
