@@ -172,7 +172,6 @@ def anim_frame_warp(prev_img_cv2, args, anim_args, keys, frame_idx, depth_model=
         prev_img = anim_frame_warp_2d(prev_img_cv2, args, anim_args, keys, frame_idx)
     else: # '3D'
         prev_img, mask = anim_frame_warp_3d(device, prev_img_cv2, depth, anim_args, keys, frame_idx)
-                
     return prev_img, depth, mask
 
 def anim_frame_warp_2d(prev_img_cv2, args, anim_args, keys, frame_idx):
@@ -382,12 +381,12 @@ def transform_image_3d_new(device, prev_img_cv2, depth_tensor, rot_mat, translat
     # )
 
 
-    if anim_args.padding_mode == "zeros":
-        mask = (new_image.abs() < 1e-5).float()
+    # if anim_args.padding_mode == "zeros":
+    mask = (new_image.abs() < 1e-5).float()
         #print(mask.shape)
-
-    else:
-        mask = None
+    #
+    # else:
+    #     mask = None
     # convert back to cv2 style numpy array
     result = rearrange(
         new_image.squeeze().clamp(0,255), 
