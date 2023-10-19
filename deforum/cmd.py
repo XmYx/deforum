@@ -3,7 +3,7 @@ import json
 import os, sys
 from types import SimpleNamespace
 
-from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, ParseqArgs, LoopArgs, RootArgs
+from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, ParseqArgs, LoopArgs, RootArgs, DeforumOutputArgs
 
 print(os.getcwd())
 
@@ -47,7 +47,10 @@ def main():
     parseg_args = SimpleNamespace(**extract_values(ParseqArgs()))
     loop_args = SimpleNamespace(**extract_values(LoopArgs()))
     root = SimpleNamespace(**RootArgs())
-    video_args = None
+
+    output_args_dict = {key: value["value"] for key, value in DeforumOutputArgs().items()}
+
+    video_args = SimpleNamespace(**output_args_dict)
     controlnet_args = None
     deforum = Deforum(args, anim_args, video_args, parseg_args, loop_args, controlnet_args, root)
     setattr(deforum.loop_args, "init_images", "")
@@ -66,6 +69,11 @@ def main():
         setattr(deforum.args, "seed_internal", 0)
     else:
         deforum.args.seed = int(deforum.args.seed)
+
+    deforum.args.W = 1024
+    deforum.args.H = 576
+    print(deforum.anim_args)
+
     success = deforum()
 
 

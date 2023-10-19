@@ -7,7 +7,7 @@ from deforum.datafunctions.prompt import check_is_number
 class DeformAnimKeys():
     def __init__(self, anim_args, seed=-1, *args, **kwargs):
 
-        print("ANIMARGS DEBUG", anim_args)
+        # print("ANIMARGS DEBUG", anim_args)
 
         self.fi = FrameInterpolater(anim_args.max_frames, seed)
         self.angle_series = self.fi.get_inbetweens(self.fi.parse_key_frames(anim_args.angle))

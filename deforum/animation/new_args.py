@@ -42,7 +42,7 @@ def DeforumAnimArgs():
             "label": "Animation mode",
             "type": "radio",
             "choices": ['2D', '3D', 'Video Input', 'Interpolation'],
-            "value": "2D",
+            "value": "3D",
             "info": "control animation mode, will hide non relevant params upon change"
         },
         "max_frames": {
@@ -413,7 +413,7 @@ def DeforumAnimArgs():
             "minimum": 1,
             "maximum": 50,
             "step": 1,
-            "value": 2,
+            "value": 1,
             "info": "# of in-between frames that will not be directly diffused"
         },
         "optical_flow_cadence": {
