@@ -54,7 +54,7 @@ torchvision_path = f"https://download.pytorch.org/whl/cu118/{torchvision_url}"
 
 setup(
     name='deforum',
-    version='0.7a',
+    version='0.8',
     packages=find_packages(),
     package_data={'deforum': ['test/test.png']},
     install_requires=[
@@ -75,6 +75,9 @@ setup(
         'opencv-contrib-python==4.7.0.72',
         'basicsr==1.4.2',
         'timm==0.6.13',
+        'diffusers',
+        'transformers'
+        'python-ffmpeg'
     ],
     entry_points={
         'console_scripts': [

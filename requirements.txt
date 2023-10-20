@@ -14,3 +14,8 @@ py3d
 librosa
 numpy
 opencv-contrib-python
+basicsr
+timm
+diffusers
+transformers
+omegaconf

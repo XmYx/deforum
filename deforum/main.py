@@ -279,8 +279,9 @@ class Deforum:
         self.prev_flow = None
         # state.job_count = self.anim_args.max_frames
         from tqdm import tqdm
-        for _ in tqdm(range(self.anim_args.max_frames), desc="Processing frames", position=0, leave=True):
-            # Webui
+        progress_bar = tqdm(total=self.anim_args.max_frames - 1, desc="Processing frames", position=0, leave=True)
+
+        while self.frame_idx < self.anim_args.max_frames:            # Webui
 
             done = self.datacallback({"job": f"frame {self.frame_idx + 1}/{self.anim_args.max_frames}",
                                       "job_no": self.frame_idx + 1})
@@ -353,7 +354,10 @@ class Deforum:
             if turbo_steps > 1:
                 self.generate_in_between_frames(raft_model, keys, prompt_series, srt_filename, srt_frame_duration,
                                    depth_model, hybrid_frame_path, hybrid_comp_schedules)
+                progress_bar.update(turbo_steps)
+            else:
 
+                progress_bar.update(1)
             # get color match for video outside of self.prev_img conditional
             hybrid_available = self.anim_args.hybrid_composite != 'None' or self.anim_args.hybrid_motion in [
                 'Optical Flow',
@@ -891,7 +895,7 @@ class Deforum:
                                    StableDiffusionXLImg2ImgPipeline, StableDiffusionControlNetImg2ImgPipeline,
                                    StableDiffusionXLControlNetPipeline, StableDiffusionXLInpaintPipeline, AutoPipelineForImage2Image)
             torch.backends.cuda.matmul.allow_tf32 = True
-            self.pipe = StableDiffusionXLPipeline.from_single_file()m(
+            self.pipe = StableDiffusionXLPipeline.from_single_file(
                 "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/sd_xl_base_1.0.safetensors",
                 # "segmind/SDXL-Mini",
                 torch_dtype=torch.float16
