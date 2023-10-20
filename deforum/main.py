@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -445,15 +446,20 @@ class Deforum:
                                                                    noise_mask_vals,
                                                                    Image.fromarray(
                                                                        cv2.cvtColor(contrast_image, cv2.COLOR_BGR2RGB)))
-                noised_image = add_noise(contrast_image, noise, self.args.seed, self.anim_args.noise_type,
-                                         (self.anim_args.perlin_w, self.anim_args.perlin_h,
-                                          self.anim_args.perlin_octaves,
-                                          self.anim_args.perlin_persistence),
-                                         self.root.noise_mask, self.args.invert_mask)
-
+                if noise > 0:
+                    noised_image = add_noise(contrast_image, noise, self.args.seed, self.anim_args.noise_type,
+                                             (self.anim_args.perlin_w, self.anim_args.perlin_h,
+                                              self.anim_args.perlin_octaves,
+                                              self.anim_args.perlin_persistence),
+                                             self.root.noise_mask, self.args.invert_mask)
+                else:
+                    noised_image = self.prev_img
                 # use transformed previous frame as init for current
+                print(f"[ Added {self.anim_args.noise_type} noise {noise} to the init image ]")
                 self.args.use_init = True
-                self.root.init_sample = Image.fromarray(cv2.cvtColor(noised_image, cv2.COLOR_BGR2RGB))
+                self.prev_img = Image.fromarray(cv2.cvtColor(noised_image, cv2.COLOR_BGR2RGB))
+                self.root.init_sample = self.prev_img
+                self.args.init_sample = self.prev_img
                 self.args.strength = max(0.0, min(1.0, strength))
 
             self.args.scale = scale
@@ -681,19 +687,19 @@ class Deforum:
             framesToImageSwapOn = list(map(int, list(parsedImages.keys())))
 
             for swappingFrame in framesToImageSwapOn[1:]:
-                frameToChoose += (frame >= int(swappingFrame))
+                frameToChoose += (self.frame_idx >= int(swappingFrame))
 
             # find which frame to do our swapping on for tweening
             skipFrame = 25
             for fs, fe in pairwise_repl(framesToImageSwapOn):
-                if fs <= frame <= fe:
+                if fs <= self.frame_idx <= fe:
                     skipFrame = fe - fs
             if skipFrame > 0:
                 # print("frame % skipFrame", frame % skipFrame)
 
-                if frame % skipFrame <= tweeningFrames:  # number of tweening frames
+                if self.frame_idx % skipFrame <= tweeningFrames:  # number of tweening frames
                     blendFactor = loop_args.blendFactorMax - loop_args.blendFactorSlope * math.cos(
-                        (frame % tweeningFrames) / (tweeningFrames / 2))
+                        (self.frame_idx % tweeningFrames) / (tweeningFrames / 2))
             else:
                 print("LOOPER ERROR, AVOIDING DIVISION BY 0")
             init_image2, _ = load_img(list(jsonImages.values())[frameToChoose],
@@ -790,7 +796,7 @@ class Deforum:
             #    process_with_controlnet(p_txt, args, anim_args, loop_args, controlnet_args, root, is_img2img=False,
             #                            self.frame_idx=frame)
 
-            processed = self.generate_txt2img(prompt, next_prompt, blend_value, negative_prompt, args, root, self.frame_idx,
+            processed = self.generate_txt2img(prompt, next_prompt, blend_value, negative_prompt, args, anim_args, root, self.frame_idx,
                                            init_image)
 
         if processed is None:
@@ -825,7 +831,7 @@ class Deforum:
             #    process_with_controlnet(p, args, anim_args, loop_args, controlnet_args, root, is_img2img=True,
             #                            self.frame_idx=frame)
 
-            processed = self.generate_txt2img(prompt, next_prompt, blend_value, negative_prompt, args, root, self.frame_idx,
+            processed = self.generate_txt2img(prompt, next_prompt, blend_value, negative_prompt, args, anim_args, root, self.frame_idx,
                                            init_image)
 
         if root.first_frame == None:
@@ -839,54 +845,54 @@ class Deforum:
     def generate_inpaint(self, args, keys, anim_args, loop_args, controlnet_args, root, sampler_name, image=None, mask=None):
 
         original_image = image.copy()
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(image)
-        mask = mask.cpu().reshape((-1, 1, mask.shape[-2], mask.shape[-1])).movedim(1, -1).expand(-1, -1, -1, 3)
-
-        mask_array = np.array(mask)
-        # Check if any values are above 0
-        has_values_above_zero = (np.array(mask) > 1e-05).any()
-        # Count the number of values above 0
-        count_values_above_zero = (mask_array > 0).sum()
-        threshold = 40000
-
-        if has_values_above_zero and count_values_above_zero > threshold and self.anim_args.padding_mode == 'zeros':
-            print(f"[ Mask pixels above {threshold} by {count_values_above_zero-threshold}, generating inpaing image ]")
-            mask = tensor2pil(mask[0])
-            mask = dilate_mask(mask, dilation_size=48)
-            change_pipe = False
-            if gs.should_run:
-                if not self.pipe or change_pipe:
-                    from diffusers import StableDiffusionInpaintPipeline
-                    self.pipe = StableDiffusionInpaintPipeline.from_single_file(
-                                "https://huggingface.co/XpucT/Deliberate/blob/main/Deliberate-inpainting.safetensors",
-                                use_safetensors=True,
-                                torch_dtype=torch.float16).to(gs.device.type)
-                    # self.pipe = StableDiffusionInpaintPipeline.from_pretrained(
-                    #             "runwayml/stable-diffusion-inpainting",
-                    #             torch_dtype=torch.float16).to(gs.device.type)
-                prompt, negative_prompt = split_weighted_subprompts(args.prompt, self.frame_idx, anim_args.max_frames)
-                generation_args = {"generator":torch.Generator(gs.device.type).manual_seed(args.seed),
-                                   "num_inference_steps":args.steps,
-                                   "prompt":prompt,
-                                   "image":image,
-                                   "mask_image":mask,
-                                   "width" : image.size[0],
-                                   "height" : image.size[1],
-                                   }
-                #image.save("inpaint_image.png", "PNG")
-                image = np.array(self.pipe(**generation_args).images[0]).astype(np.uint8)
-                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                # # Composite the original image and the generated image using the mask
-                mask_arr = np.array(mask).astype(np.uint8)[:, :, 0]  # Convert to grayscale mask for boolean indexing
-                mask_bool = mask_arr > 0  # Convert to boolean mask
-                original_image[mask_bool] = image[mask_bool]
-                #test = Image.fromarray(original_image).save("test_result.png", "PNG")
+        # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # image = Image.fromarray(image)
+        # mask = mask.cpu().reshape((-1, 1, mask.shape[-2], mask.shape[-1])).movedim(1, -1).expand(-1, -1, -1, 3)
+        #
+        # mask_array = np.array(mask)
+        # # Check if any values are above 0
+        # has_values_above_zero = (np.array(mask) > 1e-05).any()
+        # # Count the number of values above 0
+        # count_values_above_zero = (mask_array > 0).sum()
+        # threshold = 40000
+        #
+        # if has_values_above_zero and count_values_above_zero > threshold and self.anim_args.padding_mode == 'zeros':
+        #     print(f"[ Mask pixels above {threshold} by {count_values_above_zero-threshold}, generating inpaing image ]")
+        #     mask = tensor2pil(mask[0])
+        #     mask = dilate_mask(mask, dilation_size=48)
+        #     change_pipe = False
+        #     if gs.should_run:
+        #         if not self.pipe or change_pipe:
+        #             from diffusers import StableDiffusionInpaintPipeline
+        #             self.pipe = StableDiffusionInpaintPipeline.from_single_file(
+        #                         "https://huggingface.co/XpucT/Deliberate/blob/main/Deliberate-inpainting.safetensors",
+        #                         use_safetensors=True,
+        #                         torch_dtype=torch.float16).to(gs.device.type)
+        #             # self.pipe = StableDiffusionInpaintPipeline.from_pretrained(
+        #             #             "runwayml/stable-diffusion-inpainting",
+        #             #             torch_dtype=torch.float16).to(gs.device.type)
+        #         prompt, negative_prompt = split_weighted_subprompts(args.prompt, self.frame_idx, anim_args.max_frames)
+        #         generation_args = {"generator":torch.Generator(gs.device.type).manual_seed(args.seed),
+        #                            "num_inference_steps":args.steps,
+        #                            "prompt":prompt,
+        #                            "image":image,
+        #                            "mask_image":mask,
+        #                            "width" : image.size[0],
+        #                            "height" : image.size[1],
+        #                            }
+        #         #image.save("inpaint_image.png", "PNG")
+        #         image = np.array(self.pipe(**generation_args).images[0]).astype(np.uint8)
+        #         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        #         # # Composite the original image and the generated image using the mask
+        #         mask_arr = np.array(mask).astype(np.uint8)[:, :, 0]  # Convert to grayscale mask for boolean indexing
+        #         mask_bool = mask_arr > 0  # Convert to boolean mask
+        #         original_image[mask_bool] = image[mask_bool]
+        #         #test = Image.fromarray(original_image).save("test_result.png", "PNG")
 
 
         return original_image
 
-    def generate_txt2img(self, prompt, next_prompt, blend_value, negative_prompt, args, root, frame,
+    def generate_txt2img(self, prompt, next_prompt, blend_value, negative_prompt, args, anim_args, root, frame,
                                            init_image=None):
 
         if self.pipe == None:

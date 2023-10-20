@@ -76,7 +76,7 @@ setup(
         'basicsr==1.4.2',
         'timm==0.6.13',
         'diffusers',
-        'transformers'
+        'transformers',
         'python-ffmpeg'
     ],
     entry_points={
