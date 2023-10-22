@@ -53,25 +53,10 @@ class ComfyDeforumGenerator:
             latent = latent.to(torch.float32)
             latent = self.vae.encode_tiled(latent[:,:,:,:3])
             latent = latent.to("cuda")
-            # if subseed is not None:
-            #     nv_rng = rng_test.Generator(subseed)
-            #     subnoise = torch.asarray(nv_rng.randn(latent.shape), device="cuda")
-            #     latent = slerp(subseed_strength, latent, subnoise)
 
         return {"samples":latent}
 
     def generate_latent(self, width, height, seed, subseed, subseed_strength, seed_resize_from_h=None, seed_resize_from_w=None):
-
-        # nv_rng = rng_test.Generator(seed)
-        # noise = torch.asarray(nv_rng.randn([1, 4, height // 8, width // 8]), device="cuda")
-        # if subseed is not None:
-        #     if subseed == -1:
-        #         subseed = secrets.randbelow(999999999999)
-        #     nv_rng = rng_test.Generator(subseed)
-        #     subnoise = torch.asarray(nv_rng.randn(noise.shape), device="cuda")
-        #     noise = slerp(subseed_strength, noise, subnoise)
-
-        noise = torch.zeros([1, 4, height // 8, width // 8])
         shape = [4, height // 8, width // 8]
         if self.rng == None:
             self.rng = ImageRNG(shape=shape, seeds=[seed], subseeds=[subseed], subseed_strength=subseed_strength, seed_resize_from_h=seed_resize_from_h, seed_resize_from_w=seed_resize_from_w)
@@ -92,9 +77,7 @@ class ComfyDeforumGenerator:
     def load_model(self):
         from comfy.sd import load_checkpoint_guess_config
         import comfy
-
         ckpt_path = os.path.join(root_path, "models/checkpoints/protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
-        # ckpt_path = os.path.join(root_path, "models/checkpoints/sdxl_mini.safetensors")
         self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(ckpt_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings")
@@ -153,11 +136,9 @@ class ComfyDeforumGenerator:
 
         if next_prompt is not None:
             if next_prompt != prompt and next_prompt != "":
-
-                print(f"[ COMFY DEFORUM BLENDING:{prompt_blend} ]")
-
-                next_cond = self.get_conds(next_prompt)
-                cond = blend_tensors(cond[0], next_cond[0], blend_value=prompt_blend)
+                if 0.0 < prompt_blend < 1.0:
+                    next_cond = self.get_conds(next_prompt)
+                    cond = blend_tensors(cond[0], next_cond[0], blend_value=prompt_blend)
 
 
 
@@ -169,8 +150,6 @@ class ComfyDeforumGenerator:
 
         last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
         last_step = steps if last_step == None else last_step
-        print(f"[Running With STRENGTH: [{strength} LAST STEP: {last_step}] ]")
-        print(f"[CFG: [{scale} LAST STEP: {last_step}  SEED:{seed} ] ]")
         sample = ksampler(model=self.model,
                           seed=seed,
                           steps=steps,
@@ -189,8 +168,6 @@ class ComfyDeforumGenerator:
         decoded = self.decode_sample(sample[0]["samples"])
 
         np_array = np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0]
-
-        print(np_array.shape)
         image = Image.fromarray(np_array)
         #image = Image.fromarray(np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0])
         image = image.convert("RGB")
@@ -235,15 +212,13 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
 
     cnet_image = None
     input_file = os.path.join(args.outdir, 'inputframes', get_frame_name(anim_args.video_init_path) + f"{frame:09}.jpg")
+
     # if os.path.isfile(input_file):
     #     input_frame = Image.open(input_file)
-    #
     #     cnet_image = get_canny_image(input_frame)
-    #
     #     cnet_image = ImageOps.invert(cnet_image)
-    if prompt == "!reset!":
 
-        print("RESETTING", next_prompt)
+    if prompt == "!reset!":
         init_image = None
         args.strength = 1.0
         prompt = next_prompt
@@ -262,9 +237,6 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
         "prompt_blend":blend_value
     }
 
-    print(gen_args)
-
-
     if anim_args.enable_subseed_scheduling:
         gen_args["subseed"] = root.subseed
         gen_args["subseed_strength"] = root.subseed_strength
@@ -275,4 +247,5 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
 
     return image
 
-img_gen = ComfyDeforumGenerator()
+if "img_gen" not in dir(globals()):
+    img_gen = ComfyDeforumGenerator()

@@ -5,12 +5,8 @@ import os
 import json
 import argparse
 
-from deforum.cmd import setup_deforum, merge_dicts_from_txt, Interpolator, save_as_h264, reset_deforum
-
-
-frames = []
-cadence_frames = []
-
+from deforum.cmd import setup_deforum, merge_dicts_from_txt, Interpolator, save_as_h264, reset_deforum, frames, \
+    cadence_frames
 
 
 def generate_ui():

@@ -345,10 +345,12 @@ def main():
                       strength=0.45)
 
         elif args_main.pipeline == "webui":
-            from deforum import streamlit_ui
-            cmd = ["streamlit", "run", f"{root_path}/deforum/streamlit_ui.py"]
-            process = subprocess.Popen(cmd)
+            # from deforum import streamlit_ui
+            # cmd = ["streamlit", "run", f"{root_path}/deforum/streamlit_ui.py"]
+            # process = subprocess.Popen(cmd)
+            import streamlit.web.cli as stcli
 
+            stcli.main(["run", f"{root_path}/deforum/streamlit_ui.py"])
         elif args_main.pipeline == "api":
             import uvicorn
 
