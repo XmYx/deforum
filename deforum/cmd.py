@@ -7,13 +7,15 @@ import argparse
 from types import SimpleNamespace
 from PIL import Image
 from torchvision import transforms
-from fastapi import FastAPI, WebSocket, Depends
+#from fastapi import FastAPI, WebSocket, Depends
 
-from deforum.FILM.interpolator import Interpolator
 from deforum.general_utils import substitute_placeholders
 from deforum.main import Deforum
 from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, ParseqArgs, LoopArgs, RootArgs, DeforumOutputArgs
-from pydantic import BaseModel
+#from pydantic import BaseModel
+
+from deforum.pipelines.interpolator import Interpolator
+
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.extend([os.path.join(os.getcwd(), "deforum", "exttools")])
@@ -26,29 +28,28 @@ import numpy as np
 import torch
 from PIL import Image
 
-from deforum.cmd import root_path, comfy_path
 from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
-
-# 1. Check if the "src" directory exists
-if not os.path.exists(os.path.join(root_path, "src")):
-    os.makedirs(os.path.join(root_path, 'src'))
-# 2. Check if "ComfyUI" exists
-if not os.path.exists(comfy_path):
-    # Clone the repository if it doesn't exist
-    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-else:
-    # 3. If "ComfyUI" does exist, check its commit hash
-    current_folder = os.getcwd()
-    os.chdir(comfy_path)
-    current_commit = subprocess.getoutput("git rev-parse HEAD")
-
-    # 4. Reset to the desired commit if necessary
-    if current_commit != "4185324":  # replace with the full commit hash if needed
-        subprocess.run(["git", "fetch", "origin"])
-        subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
-        subprocess.run(["git", "pull", "origin", "master"])
-    os.chdir(current_folder)
+# img_gen = None
+# # 1. Check if the "src" directory exists
+# if not os.path.exists(os.path.join(root_path, "src")):
+#     os.makedirs(os.path.join(root_path, 'src'))
+# # 2. Check if "ComfyUI" exists
+# if not os.path.exists(comfy_path):
+#     # Clone the repository if it doesn't exist
+#     subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
+# else:
+#     # 3. If "ComfyUI" does exist, check its commit hash
+#     current_folder = os.getcwd()
+#     os.chdir(comfy_path)
+#     current_commit = subprocess.getoutput("git rev-parse HEAD")
+#
+#     # 4. Reset to the desired commit if necessary
+#     if current_commit != "4185324":  # replace with the full commit hash if needed
+#         subprocess.run(["git", "fetch", "origin"])
+#         subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
+#         subprocess.run(["git", "pull", "origin", "master"])
+#     os.chdir(current_folder)
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
@@ -66,7 +67,7 @@ class ComfyDeforumGenerator:
 
         model_name = os.path.join(root_path, "models/controlnet/diffusers_xl_canny_mid.safetensors")
 
-        self.controlnet = controlnet.load_controlnet(model_name)
+        # self.controlnet = controlnet.load_controlnet(model_name)
 
         self.rng = None
     def encode_latent(self, latent, subseed, subseed_strength):
@@ -82,6 +83,7 @@ class ComfyDeforumGenerator:
         if self.rng == None:
             self.rng = ImageRNG(shape=shape, seeds=[seed], subseeds=[subseed], subseed_strength=subseed_strength, seed_resize_from_h=seed_resize_from_h, seed_resize_from_w=seed_resize_from_w)
         noise = self.rng.next()
+        # noise = torch.zeros([1, 4, width // 8, height // 8])
         return {"samples":noise}
 
     def get_conds(self, prompt):
@@ -168,7 +170,7 @@ class ComfyDeforumGenerator:
             cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
 
-        #from nodes import common_ksampler as ksampler
+        from nodes import common_ksampler as ksampler
 
         last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
         last_step = steps if last_step == None else last_step
@@ -187,6 +189,21 @@ class ComfyDeforumGenerator:
                                                    last_step=last_step,
                                                    force_full_denoise=True,
                                                    noise=self.rng)
+        # sample = ksampler(model=self.model,
+        #                                            seed=seed,
+        #                                            steps=steps,
+        #                                            cfg=scale,
+        #                                            sampler_name=sampler_name,
+        #                                            scheduler=scheduler,
+        #                                            positive=cond,
+        #                                            negative=n_cond,
+        #                                            latent=latent,
+        #                                            denoise=strength,
+        #                                            disable_noise=False,
+        #                                            start_step=0,
+        #                                            last_step=last_step,
+        #                                            force_full_denoise=True,
+        #                                            )
 
 
         decoded = self.decode_sample(sample[0]["samples"])
@@ -257,8 +274,8 @@ def apply_controlnet(conditioning, control_net, image, strength):
 frames = []
 cadence_frames = []
 
-class Settings(BaseModel):
-    file_content: str
+# class Settings(BaseModel):
+#     file_content: str
 
 async def get_deforum():
     deforum = setup_deforum()
@@ -415,6 +432,7 @@ def setup_deforum(img_gen=None):
     deforum.anim_args.max_frames = 375
     deforum.video_args.store_frames_in_ram = True
     deforum.datacallback = datacallback
+    deforum.generate_txt2img = generate_txt2img_comfy
 
     return deforum
 
@@ -506,8 +524,14 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
         gen_args["subseed_strength"] = root.subseed_strength
         gen_args["seed_resize_from_h"] = args.seed_resize_from_h
         gen_args["seed_resize_from_w"] = args.seed_resize_from_w
-    #image = img_gen.generate(**gen_args)
-    return img_gen.generate(**gen_args)
+
+
+
+    image = img_gen.generate(**gen_args)
+
+    torch.cuda.empty_cache()
+
+    return image
 
 # app = FastAPI()
 #
@@ -574,6 +598,7 @@ def main():
 
             deforum = setup_deforum()
             deforum.generate_txt2img = generate_txt2img_comfy
+            deforum.datacallback = datacallback
             if args_main.file:
                 merged_data = merge_dicts_from_txt(args_main.file)
                 # 3. Update the SimpleNamespace objects
@@ -593,13 +618,19 @@ def main():
                         setattr(deforum.video_args, key, value)
             if deforum.args.seed == -1:
                 deforum.args.seed = secrets.randbelow(18446744073709551615)
+            with torch.inference_mode():
+                torch.cuda.empty_cache()
+                #sys.setrecursionlimit(10000)  # or a larger number
 
-            success = deforum()
-            output_filename_base = os.path.join(deforum.args.timestring)
+                success = deforum()
+                torch.cuda.empty_cache()
 
-            interpolator = Interpolator()
+                output_filename_base = os.path.join(deforum.args.timestring)
 
-            interpolated = interpolator(frames, 1)
+                interpolator = Interpolator()
+
+                interpolated = interpolator(frames, 1)
+                torch.cuda.empty_cache()
 
             save_as_h264(frames, output_filename_base + ".mp4", fps=15)
             save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
@@ -629,6 +660,10 @@ def main():
             # from deforum import streamlit_ui
             # cmd = ["streamlit", "run", f"{root_path}/deforum/streamlit_ui.py"]
             # process = subprocess.Popen(cmd)
+
+            # global img_gen
+            img_gen = ComfyDeforumGenerator()
+
             import streamlit.web.cli as stcli
             stcli.main(["run", f"{root_path}/deforum/streamlit_ui.py"])
         elif args_main.pipeline == "api":
@@ -649,8 +684,8 @@ def main():
             save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
             if len(cadence_frames) > 0:
                 save_as_h264(cadence_frames, output_filename_base + f"_cadence{deforum.anim_args.diffusion_cadence}.mp4")
-        except:
-            pass
+        except Exception as e:
+            print(e)
 
 if __name__ == "__main__":
     main()
