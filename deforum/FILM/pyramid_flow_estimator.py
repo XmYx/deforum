@@ -26,7 +26,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-import film_util
+from deforum.FILM import film_util
 
 
 class FlowEstimator(nn.Module):

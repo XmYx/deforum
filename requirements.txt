@@ -24,3 +24,4 @@ aiohttp
 scipy
 psutil
 clip-interrogator==0.5.4
+streamlit
