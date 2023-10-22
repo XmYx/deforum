@@ -5,8 +5,7 @@ import os
 import json
 import argparse
 
-from deforum.cmd import setup_deforum, merge_dicts_from_txt, Interpolator, save_as_h264, reset_deforum, frames, \
-    cadence_frames
+from deforum.cmd import Interpolator, save_as_h264, reset_deforum
 
 
 def generate_ui():
@@ -28,10 +27,10 @@ def generate_ui():
         # use_init = st.checkbox("Use Initialization", value=False)
         # strength = st.slider("Strength", value=0.8, min_value=0.0, max_value=1.0)
         # strength_0_no_init = st.checkbox("Strength 0 No Initialization", value=False)
-        # init_image = st.text_input("Init Image", value="https://deforum.github.io/a1/I1.png")
+        # init_image = st.text_input("Init Image", value="https://st.session_state.deforum.github.io/a1/I1.png")
         # use_mask = st.checkbox("Use Mask", value=False)
         # use_alpha_as_mask = st.checkbox("Use Alpha as Mask", value=False)
-        # mask_file = st.text_input("Mask File", value="https://deforum.github.io/a1/M1.jpg")
+        # mask_file = st.text_input("Mask File", value="https://st.session_state.deforum.github.io/a1/M1.jpg")
         # invert_mask = st.checkbox("Invert Mask", value=False)
         # mask_contrast_adjust = st.slider("Mask Contrast Adjust", value=1.0, min_value=0.0, max_value=2.0)
         # mask_brightness_adjust = st.slider("Mask Brightness Adjust", value=1.0, min_value=0.0, max_value=2.0)
@@ -99,102 +98,104 @@ def generate_ui():
 
 
 def datacallback_streamlit(data=None):
+
+
     if data:
         image = data.get("image")
         cadence_frame = data.get("cadence_frame")
     if image:
-        frames.append(image)
+        st.session_state.frames.append(image)
         # 2. Update the placeholder with the latest image
         frame_placeholder.image(image, caption="Latest Frame", use_column_width=True)
     elif cadence_frame:
-        cadence_frames.append(cadence_frame)
+        st.session_state.cadence_frames.append(cadence_frame)
         # 2. Update the cadence frame placeholder with the latest cadence frame
         cadence_frame_placeholder.image(cadence_frame, caption="Latest Cadence Frame", use_column_width=True)
 
 
 
 def main():
-    if deforum.args.seed == -1:
-        deforum.args.seed = secrets.randbelow(18446744073709551615)
+    if st.session_state.deforum.args.seed == -1:
+        st.session_state.deforum.args.seed = secrets.randbelow(18446744073709551615)
 
-    success = deforum()
-    output_filename_base = os.path.join(deforum.args.timestring)
+    success = st.session_state.deforum()
+    output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
 
     interpolator = Interpolator()
 
-    interpolated = interpolator(frames, 1)
+    interpolated = interpolator(st.session_state.frames, 1)
 
-    save_as_h264(frames, output_filename_base + ".mp4", fps=15)
+    save_as_h264(st.session_state.frames, output_filename_base + ".mp4", fps=15)
     save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
-    if len(cadence_frames) > 0:
-        save_as_h264(cadence_frames, output_filename_base + f"_cadence{deforum.anim_args.diffusion_cadence}.mp4")
+    if len(st.session_state.cadence_frames) > 0:
+        save_as_h264(st.session_state.cadence_frames, output_filename_base + f"_cadence{st.session_state.deforum.anim_args.diffusion_cadence}.mp4")
 
 
 def update_deforum(data):
+    print("Updating to file")
     for key, value in data.items():
 
-        if key == "prompts": deforum.root.animation_prompts = value
+        if key == "prompts": st.session_state.deforum.root.animation_prompts = value
 
-        if hasattr(deforum.args, key):
-            setattr(deforum.args, key, value)
-        if hasattr(deforum.anim_args, key):
-            setattr(deforum.anim_args, key, value)
-        if hasattr(deforum.parseq_args, key):
-            setattr(deforum.parseq_args, key, value)
-        if hasattr(deforum.loop_args, key):
-            setattr(deforum.loop_args, key, value)
-        if hasattr(deforum.video_args, key):
-            setattr(deforum.video_args, key, value)
+        st.session_state.deforum.animation_prompts = st.session_state.deforum.root.animation_prompts
+
+        print(st.session_state.deforum.root.animation_prompts)
+        if hasattr(st.session_state.deforum.args, key):
+            setattr(st.session_state.deforum.args, key, value)
+        if hasattr(st.session_state.deforum.anim_args, key):
+            setattr(st.session_state.deforum.anim_args, key, value)
+        if hasattr(st.session_state.deforum.parseq_args, key):
+            setattr(st.session_state.deforum.parseq_args, key, value)
+        if hasattr(st.session_state.deforum.loop_args, key):
+            setattr(st.session_state.deforum.loop_args, key, value)
+        if hasattr(st.session_state.deforum.video_args, key):
+            setattr(st.session_state.deforum.video_args, key, value)
 def save_frames():
     interpolator = Interpolator()
-    interpolated = interpolator(frames, 1)
-    output_filename_base = os.path.join(deforum.args.timestring)
-    save_as_h264(frames, output_filename_base + ".mp4", fps=15)
+    interpolated = interpolator(st.session_state.frames, 1)
+    output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
+    save_as_h264(st.session_state.frames, output_filename_base + ".mp4", fps=15)
     save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
-    if len(cadence_frames) > 0:
-        save_as_h264(cadence_frames, output_filename_base + f"_cadence{deforum.anim_args.diffusion_cadence}.mp4")
+    if len(st.session_state.cadence_frames) > 0:
+        save_as_h264(st.session_state.cadence_frames, output_filename_base + f"_cadence{st.session_state.deforum.anim_args.diffusion_cadence}.mp4")
     st.session_state.generation_complete = True  # Check if the generation was stopped prematurely
 
-if __name__ == "__main__":
+
+# Ensure initialization of frames and cadence_frames
+if "frames" not in st.session_state:
+    st.session_state["frames"] = []
+if "cadence_frames" not in st.session_state:
+    st.session_state["cadence_frames"] = []
 
 
+st.set_page_config(layout="wide")
+if "deforum" not in st.session_state:
+    from deforum.cmd import setup_deforum
+    st.session_state.deforum = setup_deforum()
+    st.session_state.deforum.datacallback = datacallback_streamlit
 
-
-    st.set_page_config(layout="wide")
-    # if "deforum" not in st.session_state:
-    deforum = setup_deforum()
-    deforum.datacallback = datacallback_streamlit
-    st.session_state.generation_started = False
+col1, col2 = st.columns([2,8])
+with col1:
+    # Setup for Streamlit
+    st.title("Deforum Animation Generator")
+    st.write("### Upload Settings File")
+    uploaded_file = st.file_uploader("Choose a settings txt file", type="txt")
+    params, submitted = generate_ui()
+with col2:
+    frame_placeholder = st.empty()
+    cadence_frame_placeholder = st.empty()
+if uploaded_file:
+    # Load settings from uploaded file
+    merged_data = json.loads(uploaded_file.getvalue())
+    # Update the SimpleNamespace objects
+if submitted:
+    st.session_state.generation_started = True
     st.session_state.generation_complete = False
-    col1, col2 = st.columns([2,8])
-    with col1:
-        # Setup for Streamlit
-        st.title("Deforum Animation Generator")
-        st.write("### Upload Settings File")
-        uploaded_file = st.file_uploader("Choose a settings txt file", type="txt")
-        params, submitted = generate_ui()
-    with col2:
-        frame_placeholder = st.empty()
-        cadence_frame_placeholder = st.empty()
-    if uploaded_file:
-        # Load settings from uploaded file
-        merged_data = json.loads(uploaded_file.getvalue())
-        # Update the SimpleNamespace objects
+    reset_deforum(st.session_state.deforum)
+    st.session_state.deforum.anim_args.seed_schedule = "0:(-1)"
+    # Call the main function to generate the animation
+    if not uploaded_file:
+        update_deforum(params)
+    elif uploaded_file:
         update_deforum(merged_data)
-
-
-
-    if submitted:
-
-        st.session_state.generation_started = True
-        st.session_state.generation_complete = False
-
-
-        reset_deforum(deforum)
-        deforum.anim_args.seed_schedule = "0:(-1)"
-
-        # Call the main function to generate the animation
-        if not uploaded_file:
-            update_deforum(params)
-        #deforum.generate_txt2img = generate_txt2img_comfy
-        main()
+    main()

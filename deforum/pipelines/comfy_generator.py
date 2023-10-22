@@ -33,10 +33,15 @@ else:
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
+
+from comfy.sample import sample as sample_k
+from comfy import model_management, controlnet
+from comfy.sd import load_checkpoint_guess_config
+
+
 class ComfyDeforumGenerator:
 
     def __init__(self):
-        from comfy import model_management, controlnet
 
         model_management.vram_state = model_management.vram_state.HIGH_VRAM
         self.clip_skip = -2
@@ -75,8 +80,6 @@ class ComfyDeforumGenerator:
             cond, pooled = self.clip.encode_from_tokens(tokens, return_pooled=True)
             return [[cond, {"pooled_output": pooled}]]
     def load_model(self):
-        from comfy.sd import load_checkpoint_guess_config
-        import comfy
         ckpt_path = os.path.join(root_path, "models/checkpoints/protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
         self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(ckpt_path, output_vae=True,
                                                                              output_clip=True,
@@ -110,6 +113,8 @@ class ComfyDeforumGenerator:
 
         if seed == -1:
             seed = secrets.randbelow(18446744073709551615)
+
+
         if subseed == -1:
             subseed = secrets.randbelow(18446744073709551615)
 
@@ -146,24 +151,26 @@ class ComfyDeforumGenerator:
             cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
 
-        from nodes import common_ksampler as ksampler
+        #from nodes import common_ksampler as ksampler
 
         last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
         last_step = steps if last_step == None else last_step
-        sample = ksampler(model=self.model,
-                          seed=seed,
-                          steps=steps,
-                          cfg=scale,
-                          sampler_name=sampler_name,
-                          scheduler=scheduler,
-                          positive=cond,
-                          negative=n_cond,
-                          latent=latent,
-                          denoise=strength,
-                          disable_noise=False,
-                          start_step=0,
-                          last_step=last_step,
-                          force_full_denoise=True)
+        sample = common_ksampler_with_custom_noise(model=self.model,
+                                                   seed=seed,
+                                                   steps=steps,
+                                                   cfg=scale,
+                                                   sampler_name=sampler_name,
+                                                   scheduler=scheduler,
+                                                   positive=cond,
+                                                   negative=n_cond,
+                                                   latent=latent,
+                                                   denoise=strength,
+                                                   disable_noise=False,
+                                                   start_step=0,
+                                                   last_step=last_step,
+                                                   force_full_denoise=True,
+                                                   noise=self.rng)
+
 
         decoded = self.decode_sample(sample[0]["samples"])
 
@@ -184,6 +191,33 @@ class ComfyDeforumGenerator:
 
         return decoded
 
+def common_ksampler_with_custom_noise(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent,
+                                      denoise=1.0, disable_noise=False, start_step=None, last_step=None,
+                                      force_full_denoise=False, noise=None):
+    latent_image = latent["samples"]
+
+    rng_noise = noise.next().detach().cpu()
+
+    noise = rng_noise.clone()
+
+
+    noise_mask = None
+    if "noise_mask" in latent:
+        noise_mask = latent["noise_mask"]
+
+    # callback = latent_preview.prepare_callback(model, steps)
+    # disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
+
+
+    samples = sample_k(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image,
+                                  denoise=denoise, disable_noise=disable_noise, start_step=start_step,
+                                  last_step=last_step,
+                                  force_full_denoise=force_full_denoise, noise_mask=noise_mask, callback=None,
+                                  disable_pbar=False, seed=seed)
+    out = latent.copy()
+    out["samples"] = samples
+
+    return (out,)
 
 def apply_controlnet(conditioning, control_net, image, strength):
     with torch.inference_mode():
@@ -203,49 +237,5 @@ def apply_controlnet(conditioning, control_net, image, strength):
     return c
 
 
-def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, args, anim_args, root, frame,
-                                       init_image=None):
 
 
-    args.strength = 1.0 if init_image is None else args.strength
-    from deforum.avfunctions.video_audio_utilities import get_frame_name
-
-    cnet_image = None
-    input_file = os.path.join(args.outdir, 'inputframes', get_frame_name(anim_args.video_init_path) + f"{frame:09}.jpg")
-
-    # if os.path.isfile(input_file):
-    #     input_frame = Image.open(input_file)
-    #     cnet_image = get_canny_image(input_frame)
-    #     cnet_image = ImageOps.invert(cnet_image)
-
-    if prompt == "!reset!":
-        init_image = None
-        args.strength = 1.0
-        prompt = next_prompt
-    gen_args = {
-        "prompt":prompt,
-        "negative_prompt":negative_prompt,
-        "steps":args.steps,
-        "seed":args.seed,
-        "scale":args.scale,
-        "strength":args.strength,
-        "init_image":init_image,
-        "width":args.W,
-        "height":args.H,
-        "cnet_image":cnet_image,
-        "next_prompt":next_prompt,
-        "prompt_blend":blend_value
-    }
-
-    if anim_args.enable_subseed_scheduling:
-        gen_args["subseed"] = root.subseed
-        gen_args["subseed_strength"] = root.subseed_strength
-        gen_args["seed_resize_from_h"] = args.seed_resize_from_h
-        gen_args["seed_resize_from_w"] = args.seed_resize_from_w
-
-    image = img_gen.generate(**gen_args)
-
-    return image
-
-if "img_gen" not in dir(globals()):
-    img_gen = ComfyDeforumGenerator()
