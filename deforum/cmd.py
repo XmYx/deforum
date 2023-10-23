@@ -11,12 +11,12 @@ from PIL import Image
 from torchvision import transforms
 from tqdm import tqdm
 
-#from fastapi import FastAPI, WebSocket, Depends
+from fastapi import FastAPI, WebSocket, Depends
 
 from deforum.general_utils import substitute_placeholders
 from deforum.main import Deforum
 from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, ParseqArgs, LoopArgs, RootArgs, DeforumOutputArgs
-#from pydantic import BaseModel
+from pydantic import BaseModel
 
 from deforum.pipelines.interpolator import Interpolator
 
@@ -333,8 +333,8 @@ def apply_controlnet(conditioning, control_net, image, strength):
 frames = []
 cadence_frames = []
 
-# class Settings(BaseModel):
-#     file_content: str
+class Settings(BaseModel):
+    file_content: str
 
 async def get_deforum():
     deforum = setup_deforum()
@@ -598,48 +598,48 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
 
     return image
 
-# app = FastAPI()
-#
-#
-# @app.post("/start_deforum")
-# async def start_deforum(settings: Settings, deforum=Depends(get_deforum)):
-#     merged_data = json.loads(settings.file_content)
-#
-#     # Update the SimpleNamespace objects as you did in the main() function
-#     for key, value in merged_data.items():
-#         if key == "prompts": deforum.root.animation_prompts = value
-#
-#         if hasattr(deforum.args, key):
-#             setattr(deforum.args, key, value)
-#         if hasattr(deforum.anim_args, key):
-#             setattr(deforum.anim_args, key, value)
-#         if hasattr(deforum.parseq_args, key):
-#             setattr(deforum.parseq_args, key, value)
-#         if hasattr(deforum.loop_args, key):
-#             setattr(deforum.loop_args, key, value)
-#         if hasattr(deforum.video_args, key):
-#             setattr(deforum.video_args, key, value)
-#
-#     return {"status": "success"}
-#
-#
-# @app.websocket("/ws/datacallback")
-# async def websocket_endpoint(websocket: WebSocket, deforum=Depends(get_deforum)):
-#     global ws
-#     ws = websocket
-#     await websocket.accept()
-#     deforum.datacallback = ws_datacallback
-#
-#     success = deforum()
-#
-#     return {"status": "done"}
-#
-# async def ws_datacallback(data=None):
-#     if data:
-#         image = data.get("image")
-#         # Send image via WebSocket
-#         if image:
-#             await ws.send_bytes(image)
+app = FastAPI()
+
+
+@app.post("/start_deforum")
+async def start_deforum(settings: Settings, deforum=Depends(get_deforum)):
+    merged_data = json.loads(settings.file_content)
+
+    # Update the SimpleNamespace objects as you did in the main() function
+    for key, value in merged_data.items():
+        if key == "prompts": deforum.root.animation_prompts = value
+
+        if hasattr(deforum.args, key):
+            setattr(deforum.args, key, value)
+        if hasattr(deforum.anim_args, key):
+            setattr(deforum.anim_args, key, value)
+        if hasattr(deforum.parseq_args, key):
+            setattr(deforum.parseq_args, key, value)
+        if hasattr(deforum.loop_args, key):
+            setattr(deforum.loop_args, key, value)
+        if hasattr(deforum.video_args, key):
+            setattr(deforum.video_args, key, value)
+
+    return {"status": "success"}
+
+
+@app.websocket("/ws/datacallback")
+async def websocket_endpoint(websocket: WebSocket, deforum=Depends(get_deforum)):
+    global ws
+    ws = websocket
+    await websocket.accept()
+    deforum.datacallback = ws_datacallback
+
+    success = deforum()
+
+    return {"status": "done"}
+
+async def ws_datacallback(data=None):
+    if data:
+        image = data.get("image")
+        # Send image via WebSocket
+        if image:
+            await ws.send_bytes(image)
 
 
 
