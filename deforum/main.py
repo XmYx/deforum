@@ -3,6 +3,7 @@ import os
 import sys
 
 import torch
+from scipy.ndimage import zoom, gaussian_filter
 
 from deforum.datafunctions.settings import get_keys_to_exclude
 
@@ -25,7 +26,7 @@ from deforum.exttools.depth import DepthModel
 from deforum.avfunctions.hybridvideo.hybrid_video import hybrid_generation, get_flow_from_images, \
     image_transform_optical_flow, get_matrix_for_hybrid_motion_prev, image_transform_ransac, \
     get_matrix_for_hybrid_motion, get_flow_for_hybrid_motion_prev, get_flow_for_hybrid_motion, abs_flow_to_rel_flow, \
-    rel_flow_to_abs_flow, hybrid_composite
+    rel_flow_to_abs_flow, hybrid_composite, get_reliable_flow_from_images
 from deforum.avfunctions.image.image_sharpening import unsharp_mask
 from deforum.avfunctions.image.load_images import load_img, get_mask_from_file, get_mask, load_image
 from deforum.avfunctions.image.save_images import save_image
@@ -122,7 +123,7 @@ class Deforum:
         return srt_filename, srt_frame_duration, hybrid_frame_path, self.prev_flow
 
     def __call__(self, *args, **kwargs):
-
+        self.images = []
         self.cadence_flow = None
         srt_filename = None
         srt_frame_duration = None
@@ -1281,6 +1282,8 @@ class Deforum:
         # Webui
         # state.job_count = anim_args.max_frames
         # last_preview_frame = 0
+        gen_flows = {}
+        hybrid_flows = {}
 
         while frame_idx < anim_args.max_frames:
             # Webui
@@ -1534,6 +1537,20 @@ class Deforum:
                                                               anim_args.hybrid_motion)
                     prev_img = image_transform_ransac(prev_img, matrix, anim_args.hybrid_motion)
                 if anim_args.hybrid_motion in ['Optical Flow']:
+
+                    if hasattr(self, "test_flow"):
+                        test = self.test_flow
+                    else:
+                        test = False
+
+                    if len(self.images) >= 2 and test:
+
+                        print(f"GETTING FLOW FROM {frame_idx} WHEN HAVING {len(self.images)}")
+
+                        gen_flows[frame_idx] = get_reliable_flow_from_images(self.images[frame_idx-1], self.images[frame_idx-2],
+                                                                             method="DIS Medium", raft_model=raft_model,
+                                                                             prev_flow=prev_flow, consistency_blur=2, reliability=1)[0]
+
                     if anim_args.hybrid_motion_use_prev_img:
                         flow = get_flow_for_hybrid_motion_prev(frame_idx - 1, (args.W, args.H), inputfiles,
                                                                hybrid_frame_path, prev_flow, prev_img,
@@ -1541,12 +1558,63 @@ class Deforum:
                                                                anim_args.hybrid_flow_consistency,
                                                                anim_args.hybrid_consistency_blur,
                                                                anim_args.hybrid_comp_save_extra_frames)
+
+
                     else:
                         flow = get_flow_for_hybrid_motion(frame_idx - 1, (args.W, args.H), inputfiles, hybrid_frame_path,
                                                           prev_flow, anim_args.hybrid_flow_method, raft_model,
                                                           anim_args.hybrid_flow_consistency,
                                                           anim_args.hybrid_consistency_blur,
                                                           anim_args.hybrid_comp_save_extra_frames)
+
+
+
+                    # Test Consistency Check
+                    if frame_idx > 2 and test:
+                        backward_flow = get_reliable_flow_from_images(self.images[frame_idx-1], self.images[frame_idx-2],
+                                                                             method="DIS Medium", raft_model=raft_model,
+                                                                             prev_flow=prev_flow, consistency_blur=2, reliability=0)[0]
+
+                        # Assuming you have a function warp_using_flow to warp an image or flow using a flow
+                        warped_backward_flow = image_transform_optical_flow(backward_flow, flow, hybrid_comp_schedules['flow_factor'])
+
+                        # Compute the consistency metric
+                        consistency_metric = np.linalg.norm(flow + warped_backward_flow)
+                        print("CONSISTENCY:", consistency_metric)
+                        # Use the consistency metric to refine the flow
+                        reliability_threshold = 1.0  # Set based on your requirements
+
+                        if consistency_metric >= reliability_threshold:
+                            flow = gen_flows[frame_idx]
+                    if test:
+                        if len(self.images) > 2:
+                            # Calculate the necessary zoom factors for each dimension
+                            zoom_factors = (flow.shape[0] / gen_flows[frame_idx].shape[0],
+                                            flow.shape[1] / gen_flows[frame_idx].shape[1],
+                                            flow.shape[2] / gen_flows[frame_idx].shape[2])
+
+                            gen_flows[frame_idx] = zoom(gen_flows[frame_idx], zoom_factors)
+
+                            # Compute the magnitude of the flows
+                            magnitude_flow = np.sqrt(np.sum(flow ** 2, axis=-1))
+                            magnitude_gen_flow = np.sqrt(np.sum(gen_flows[frame_idx] ** 2, axis=-1))
+
+                            # Compute average magnitude
+                            avg_magnitude_flow = np.mean(magnitude_flow)
+                            avg_magnitude_gen_flow = np.mean(magnitude_gen_flow)
+                            combined_flow = (avg_magnitude_flow * flow + avg_magnitude_gen_flow * gen_flows[
+                                frame_idx]) / (avg_magnitude_flow + avg_magnitude_gen_flow)
+
+                            alpha = 0.7  # This is a hyperparameter. You can adjust based on your needs.
+
+                            if prev_flow is not None:
+                                flow = alpha * prev_flow + (1 - alpha) * combined_flow
+                            else:
+                                flow = combined_flow
+
+                            flow = gaussian_filter(flow, sigma=1)  # You can adjust the sigma based on your needs.
+
+
                     prev_img = image_transform_optical_flow(prev_img, flow, hybrid_comp_schedules['flow_factor'])
                     prev_flow = flow
 
@@ -1700,7 +1768,6 @@ class Deforum:
 
             # generation
             image = self.generate(args, keys, anim_args, loop_args, controlnet_args, root, sampler_name=scheduled_sampler_name)
-
             if image is None:
                 break
 
@@ -1737,6 +1804,8 @@ class Deforum:
                 color_match_sample = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
             opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            self.images.append(opencv_image)
+
             if not using_vid_init:
                 prev_img = opencv_image
 

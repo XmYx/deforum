@@ -185,6 +185,7 @@ class ComfyDeforumGenerator:
             seed = secrets.randbelow(18446744073709551615)
         if strength > 1:
             strength = 1.0
+            init_image = None
 
         if subseed == -1:
             subseed = secrets.randbelow(18446744073709551615)
@@ -565,6 +566,10 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
         init_image = None
         args.strength = 1.0
         prompt = next_prompt
+
+    if negative_prompt == "":
+        negative_prompt = anim_args.animation_prompts_negative
+
     gen_args = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
@@ -663,6 +668,10 @@ def main():
 
 
             deforum = setup_deforum()
+
+            #Switch to turn test Glow Consistency functions on or off
+            deforum.test_flow = False
+
             deforum.generate_txt2img = generate_txt2img_comfy
             deforum.datacallback = datacallback
             if args_main.file:
@@ -723,13 +732,6 @@ def main():
                       strength=0.45)
 
         elif args_main.pipeline == "webui":
-            # from deforum import streamlit_ui
-            # cmd = ["streamlit", "run", f"{root_path}/deforum/streamlit_ui.py"]
-            # process = subprocess.Popen(cmd)
-
-            img_gen = ComfyDeforumGenerator()
-            #global img_gen
-
             import streamlit.web.cli as stcli
             stcli.main(["run", f"{root_path}/deforum/streamlit_ui.py"])
         elif args_main.pipeline == "api":

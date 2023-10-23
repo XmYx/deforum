@@ -52,6 +52,18 @@ def DeforumAnimArgs():
             "value": 120,
             "info": "end the animation at this frame number",
         },
+        "animtion_prompts_positive": {
+            "label": "animtion_prompts_positive",
+            "type": "textbox",
+            "value": "",
+            "info": ""
+        },
+        "animation_prompts_negative": {
+            "label": "animation_prompts_negative",
+            "type": "textbox",
+            "value": "nsfw, nude, ugly",
+            "info": ""
+        },
         "border": {
             "label": "Border mode",
             "type": "radio",
