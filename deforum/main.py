@@ -4,6 +4,8 @@ import sys
 
 import torch
 
+from deforum.datafunctions.settings import get_keys_to_exclude
+
 sys.path.extend([os.path.join(os.getcwd(), "deforum", "exttools")])
 
 import pandas as pd
@@ -949,10 +951,41 @@ class Deforum:
 
         return image
 
-    def save_settings_from_animation_run(args, anim_args, parseq_args, loop_args, controlnet_args, video_args, root,
-                                         full_out_file_path=None):
-        return
+    # def save_settings_from_animation_run(args, anim_args, parseq_args, loop_args, controlnet_args, video_args, root,
+    #                                      full_out_file_path=None):
+    #     return
 
+    def save_settings_from_animation_run(self, args, anim_args, parseq_args, loop_args, controlnet_args, video_args, root,
+                                         full_out_file_path=None):
+        if full_out_file_path:
+            args.__dict__["seed"] = root.raw_seed
+            args.__dict__["batch_name"] = root.raw_batch_name
+        args.__dict__["prompts"] = root.animation_prompts
+        #args.__dict__["positive_prompts"] = root.positive_prompts
+        #args.__dict__["negative_prompts"] = root.negative_prompts
+        exclude_keys = get_keys_to_exclude()
+
+
+
+        settings_filename = full_out_file_path if full_out_file_path else os.path.join(args.outdir,
+                                                                                       f"{args.timestring}_settings.txt")
+
+        if hasattr(self, "config_dir"):
+            settings_filename = os.path.join(self.config_dir, f"{args.timestring}_settings.txt")
+
+        print(f"[DEFORUM SAVED SETTINGS AS: {settings_filename}]")
+
+        with open(settings_filename, "w+", encoding="utf-8") as f:
+            s = {}
+            for d in (
+            args.__dict__, anim_args.__dict__, parseq_args.__dict__, loop_args.__dict__, controlnet_args.__dict__,
+            video_args.__dict__):
+                s.update({k: v for k, v in d.items() if k not in exclude_keys})
+            # s["sd_model_name"] = sh.sd_model.sd_checkpoint_info.name
+            # s["sd_model_hash"] = sh.sd_model.sd_checkpoint_info.hash
+            #s["deforum_git_commit_id"] = get_deforum_version()
+            json.dump(s, f, ensure_ascii=False, indent=4)
+        f.close()
     def handle_controlnet(self, args, anim_args, controlnet_args):
         print("DEFORUM DUMMY CONTROLNET HANDLER, REPLACE ME WITH YOUR UI's, or API's CONTROLNET HANDLER")
         return None

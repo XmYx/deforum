@@ -36,9 +36,8 @@ class FilmModel():
     def __init__(self):
         super().__init__()
 
-
-
-        self.model_path = "models/other/film_net_fp16.pt"
+        from deforum.cmd import root_path
+        self.model_path = os.path.join(root_path, "models/other/film_net_fp16.pt")
         url = 'https://github.com/dajes/frame-interpolation-pytorch/releases/download/v1.0.0/film_net_fp16.pt'
         if not os.path.isfile(self.model_path):
             poorman_wget(url, self.model_path)

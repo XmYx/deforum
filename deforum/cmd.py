@@ -5,8 +5,12 @@ import time
 import argparse
 
 from types import SimpleNamespace
+
+import requests
 from PIL import Image
 from torchvision import transforms
+from tqdm import tqdm
+
 #from fastapi import FastAPI, WebSocket, Depends
 
 from deforum.general_utils import substitute_placeholders
@@ -30,6 +34,10 @@ from PIL import Image
 
 from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
+
+
+img_gen = None
+
 # img_gen = None
 # # 1. Check if the "src" directory exists
 # if not os.path.exists(os.path.join(root_path, "src")):
@@ -53,7 +61,45 @@ from deforum.rng.rng import ImageRNG
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
+def fetch_and_download_model(modelId, destination):
+    # Fetch model details
+    response = requests.get(f"https://civitai.com/api/v1/models/{modelId}")
+    response.raise_for_status()
+    model_data = response.json()
 
+
+
+    download_url = model_data['modelVersions'][0]['downloadUrl']
+    filename = model_data['modelVersions'][0]['files'][0]['name']
+
+    print(download_url)
+
+    print(filename)
+    dir_path = destination
+    os.makedirs(dir_path, exist_ok=True)
+    filepath = os.path.join("models/checkpoints/", filename)
+
+    # Check if file already exists
+    if os.path.exists(filepath):
+        print(f"File {filename} already exists in models/checkpoints/")
+        return
+
+    # Download file in chunks with progress bar
+    print(f"Downloading {filename}...")
+    response = requests.get(download_url, stream=True, headers={'Content-Disposition': 'attachment'})
+    total_size = int(response.headers.get('content-length', 0))
+    block_size = 1024  # 1 Kibibyte
+    t = tqdm(total=total_size, unit='iB', unit_scale=True)
+    with open(filepath, 'wb') as f:
+        for data in response.iter_content(block_size):
+            t.update(len(data))
+            f.write(data)
+    t.close()
+
+    if total_size != 0 and t.n != total_size:
+        print("ERROR: Something went wrong while downloading the file.")
+    else:
+        print(f"{filename} downloaded successfully!")
 
 class ComfyDeforumGenerator:
 
@@ -99,7 +145,13 @@ class ComfyDeforumGenerator:
             return [[cond, {"pooled_output": pooled}]]
     def load_model(self):
         from comfy.sd import load_checkpoint_guess_config
-        ckpt_path = os.path.join(root_path, "models/checkpoints/protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
+
+
+        models_dir = os.path.join(root_path, 'models/checkpoints')
+        fetch_and_download_model(125703, models_dir)
+
+        ckpt_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
+
         self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(ckpt_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings")
@@ -132,7 +184,8 @@ class ComfyDeforumGenerator:
 
         if seed == -1:
             seed = secrets.randbelow(18446744073709551615)
-
+        if strength > 1:
+            strength = 1.0
 
         if subseed == -1:
             subseed = secrets.randbelow(18446744073709551615)
@@ -229,10 +282,16 @@ def common_ksampler_with_custom_noise(model, seed, steps, cfg, sampler_name, sch
                                       denoise=1.0, disable_noise=False, start_step=None, last_step=None,
                                       force_full_denoise=False, noise=None):
     latent_image = latent["samples"]
-
-    rng_noise = noise.next().detach().cpu()
-
-    noise = rng_noise.clone()
+    if noise is not None:
+        rng_noise = noise.next().detach().cpu()
+        noise = rng_noise.clone()
+    else:
+        if disable_noise:
+            noise = torch.zeros(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout, device="cpu")
+        else:
+            batch_inds = latent["batch_index"] if "batch_index" in latent else None
+            from comfy.sample import prepare_noise
+            noise = prepare_noise(latent_image, seed, batch_inds)
 
 
     noise_mask = None
@@ -402,9 +461,10 @@ def setup_deforum(img_gen=None):
     output_args_dict = {key: value["value"] for key, value in DeforumOutputArgs().items()}
 
     video_args = SimpleNamespace(**output_args_dict)
-    controlnet_args = None
+    controlnet_args = SimpleNamespace(**{})
     deforum = Deforum(args, anim_args, video_args, parseg_args, loop_args, controlnet_args, root)
     setattr(deforum.loop_args, "init_images", "")
+    deforum.parseq_args.parseq_manifest = None
     animation_prompts = DeforumAnimPrompts()
     deforum.root.animation_prompts = json.loads(animation_prompts)
     deforum.animation_prompts = deforum.root.animation_prompts
@@ -454,7 +514,9 @@ def reset_deforum(deforum):
     deforum.loop_args = loop_args
     deforum.root = root
     deforum.video_args = video_args
-    deforum.controlnet_args = None
+    deforum.controlnet_args = SimpleNamespace(**{})
+    deforum.parseq_args.parseq_manifest = None
+
     setattr(deforum.loop_args, "init_images", "")
     animation_prompts = DeforumAnimPrompts()
     deforum.root.animation_prompts = json.loads(animation_prompts)
@@ -518,6 +580,9 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
         "next_prompt": next_prompt,
         "prompt_blend": blend_value
     }
+
+    print(f"DEFORUM GEN ARGS: [{gen_args}] ")
+
 
     if anim_args.enable_subseed_scheduling:
         gen_args["subseed"] = root.subseed
@@ -661,8 +726,8 @@ def main():
             # cmd = ["streamlit", "run", f"{root_path}/deforum/streamlit_ui.py"]
             # process = subprocess.Popen(cmd)
 
-            # global img_gen
             img_gen = ComfyDeforumGenerator()
+            #global img_gen
 
             import streamlit.web.cli as stcli
             stcli.main(["run", f"{root_path}/deforum/streamlit_ui.py"])

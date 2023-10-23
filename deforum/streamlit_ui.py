@@ -118,7 +118,13 @@ def main():
     if st.session_state.deforum.args.seed == -1:
         st.session_state.deforum.args.seed = secrets.randbelow(18446744073709551615)
 
+
+    print(st.session_state.deforum.anim_args.strength_schedule)
+
+
     success = st.session_state.deforum()
+
+
     output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
 
     interpolator = Interpolator()
@@ -139,7 +145,7 @@ def update_deforum(data):
 
         st.session_state.deforum.animation_prompts = st.session_state.deforum.root.animation_prompts
 
-        print(st.session_state.deforum.root.animation_prompts)
+        # print(st.session_state.deforum.root.animation_prompts)
         if hasattr(st.session_state.deforum.args, key):
             setattr(st.session_state.deforum.args, key, value)
         if hasattr(st.session_state.deforum.anim_args, key):
@@ -194,8 +200,10 @@ if submitted:
     reset_deforum(st.session_state.deforum)
     st.session_state.deforum.anim_args.seed_schedule = "0:(-1)"
     # Call the main function to generate the animation
-    if not uploaded_file:
-        update_deforum(params)
-    elif uploaded_file:
+
+    if uploaded_file:
         update_deforum(merged_data)
-    main()
+        main()
+    else:
+        update_deforum(params)
+        main()

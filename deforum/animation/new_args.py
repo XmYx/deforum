@@ -981,7 +981,7 @@ def ParseqArgs():
             "label": "Parseq Manifest (JSON or URL)",
             "type": "textbox",
             "lines": 4,
-            "value": None,
+            "value": "None",
         },
         "parseq_use_deltas": {
             "label": "Use delta values for movement parameters",
