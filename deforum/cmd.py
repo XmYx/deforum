@@ -35,8 +35,7 @@ from PIL import Image
 from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
 
-
-img_gen = None
+from deforum.storages import models as model_storage
 
 # img_gen = None
 # # 1. Check if the "src" directory exists
@@ -592,7 +591,7 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
 
 
 
-    image = img_gen.generate(**gen_args)
+    image = model_storage.img_gen.generate(**gen_args)
 
     torch.cuda.empty_cache()
 
@@ -646,6 +645,8 @@ async def ws_datacallback(data=None):
 
 def main():
     process = None
+    model_storage.img_gen = ComfyDeforumGenerator()
+
     parser = argparse.ArgumentParser(description="Load settings from a txt file and run the deforum process.")
     parser.add_argument("--file", type=str, help="Path to the txt file containing dictionaries to merge.")
     parser.add_argument("--pipeline", type=str, default="deforum", help="Path to the txt file containing dictionaries to merge.")
@@ -656,8 +657,8 @@ def main():
     try:
         if args_main.pipeline == "deforum":
 
-            global img_gen
-            img_gen = ComfyDeforumGenerator()
+            # global img_gen
+
 
 
 
