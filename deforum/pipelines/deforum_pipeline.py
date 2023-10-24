@@ -1,125 +1,150 @@
-import gc
 import importlib
 import json
 import math
 import os
-import random
 import secrets
+import sys
 import textwrap
 import time
 from datetime import datetime
 from typing import Optional, Callable
 
-import PIL
-import cv2
 import numexpr
 import numpy as np
 import pandas as pd
 import torch
-from PIL import Image, ImageOps, ImageChops, ImageEnhance
+from PIL import Image
 
-# from deforum import (root_path,
-#                      fetch_and_download_model,
-#                      available_engines,
-#                      ComfyDeforumGenerator,
-#                      available_engine_classes,
-#                      available_pipelines)
-from deforum.animation.animation import get_flip_perspective_matrix, flip_3d_perspective, transform_image_3d_new, \
-    anim_frame_warp
 from deforum.animation.animation_key_frames import DeformAnimKeys, LooperAnimKeys
 from deforum.animation.base_args import DeforumAnimPrompts
 from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, DeforumOutputArgs, RootArgs, ParseqArgs, LoopArgs
-from deforum.avfunctions.colors.colors import maintain_colors
-from deforum.avfunctions.hybridvideo.hybrid_video import autocontrast_grayscale, get_matrix_for_hybrid_motion_prev, \
-    get_matrix_for_hybrid_motion, image_transform_ransac, get_flow_for_hybrid_motion_prev, get_flow_for_hybrid_motion, \
-    image_transform_optical_flow, get_flow_from_images, hybrid_composite, abs_flow_to_rel_flow, rel_flow_to_abs_flow, \
-    hybrid_generation
-from deforum.avfunctions.image.image_sharpening import unsharp_mask
-from deforum.avfunctions.image.load_images import load_image, get_mask_from_file, load_img, prepare_mask, \
-    check_mask_for_errors
-from deforum.avfunctions.image.save_images import save_image
+from deforum.avfunctions.hybridvideo.hybrid_video import hybrid_generation
+from deforum.avfunctions.image.load_images import load_img, prepare_mask, check_mask_for_errors
 from deforum.avfunctions.interpolation.RAFT import RAFT
-from deforum.avfunctions.masks.composable_masks import compose_mask_with_check
-from deforum.avfunctions.masks.masks import do_overlay_mask
-from deforum.avfunctions.noise.noise import add_noise
-from deforum.avfunctions.video_audio_utilities import get_frame_name, get_next_frame
-from deforum.cmd import extract_values, save_as_h264
-from deforum.datafunctions.prompt import prepare_prompt, check_is_number, split_weighted_subprompts
-from deforum.datafunctions.seed import next_seed
+from deforum.cmd import extract_values
+from deforum.datafunctions.prompt import check_is_number, split_weighted_subprompts
 from deforum.exttools.depth import DepthModel
 from deforum.general_utils import pairwise_repl
-from deforum.pipelines.interpolator import Interpolator
 
-root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from deforum.pipelines.animation_elements import (anim_frame_warp_cls,
+                                                 hybrid_composite_cls,
+                                                 affine_persp_motion,
+                                                 optical_flow_motion,
+                                                 color_match_cls,
+                                                 set_contrast_image,
+                                                 handle_noise_mask,
+                                                 add_noise_cls,
+                                                 get_generation_params,
+                                                 optical_flow_redo,
+                                                 main_generate_with_cls,
+                                                 post_hybrid_composite_cls,
+                                                 post_gen_cls,
+                                                 post_color_match_with_cls,
+                                                 film_interpolate_cls,
+                                                 overlay_mask_cls,
+                                                 make_cadence_frames,
+                                                 color_match_video_input,
+                                                 diffusion_redo)
+
+
+#root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from deforum.shared import root_path, other_model_dir
+
 default_cache_folder = os.path.join(root_path, "models/checkpoints")
 
 script_start_time = time.time()
 
-from deforum.exttools import py3d_tools as p3d
-def calculate_frames_to_add(total_frames, interp_x):
-    frames_to_add = (total_frames * interp_x - total_frames) / (total_frames - 1)
-    return int(round(frames_to_add))
+
 class DeforumBase:
+    """
+    Base class for the Deforum animation processing.
+
+    Provides methods for initializing the Deforum animation pipeline using specific generator and pipeline configurations.
+    """
 
     @classmethod
     def from_civitai(cls,
-                     modelid:str=None,
-                     generator:str="comfy",
-                     pipeline:str="DeforumAnimationPipeline",
-                     cache_dir:str=default_cache_folder,
-                     lcm=False):
+                     modelid: str = None,
+                     generator: str = "comfy",
+                     pipeline: str = "DeforumAnimationPipeline",
+                     cache_dir: str = default_cache_folder,
+                     lcm: bool = False) -> 'DeforumBase':
+        """
+        Class method to initialize a Deforum animation pipeline using specific configurations.
+
+        Args:
+            modelid (str, optional): Identifier for the model to fetch from CivitAi. Defaults to None.
+            generator (str, optional): The generator to use for the Deforum animation. Defaults to "comfy".
+            pipeline (str, optional): The pipeline to use for the animation processing. Defaults to "DeforumAnimationPipeline".
+            cache_dir (str, optional): Directory for caching models. Defaults to default_cache_folder.
+            lcm (bool, optional): Flag to determine if low-complexity mode should be activated. Defaults to False.
+
+        Returns:
+            DeforumBase: Initialized Deforum animation pipeline object.
+
+        Raises:
+            AssertionError: Raised if the specified generator or pipeline is not available or if cache directory issues occur.
+        """
 
         from deforum import available_engines
         assert generator in available_engines, f"Make sure to use one of the available engines: {available_engines}"
+
         from deforum import available_pipelines
         assert pipeline in available_pipelines, f"Make sure to use one of the available pipelines: {available_pipelines}"
 
+        # Ensure cache directory exists
         if not os.path.isdir(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
+        assert os.path.isdir(
+            cache_dir), "Could not create the requested cache dir, make sure the application has permissions"
 
-        assert os.path.isdir(cache_dir), "Could not create the requested cache dir, make sure the application has permissions"
-        # Download model from CivitAi if not in default or given cache folder
-        if modelid != None:
-            # try:
+        # Download model from CivitAi if specified
+        if modelid is not None:
             from deforum import fetch_and_download_model
             model_file_name = fetch_and_download_model(modelId=modelid)
             model_path = os.path.join(cache_dir, model_file_name)
-            # except Exception as e:
-            #     model_path = None
-            #     print(e)
         else:
             model_path = None
-        from deforum import ComfyDeforumGenerator
 
+        # Initialize the generator
+        from deforum import ComfyDeforumGenerator
         generator = ComfyDeforumGenerator(model_path=model_path, lcm=lcm)
 
+        # Import the relevant pipeline class
         deforum_module = importlib.import_module(cls.__module__.split(".")[0])
-
-        # print(cls.__name__)
-
-        #pipeline_class = getattr(deforum_module, pipeline)
         pipeline_class = getattr(deforum_module, cls.__name__)
 
+        # Create and return pipeline object
         pipe = pipeline_class(generator)
-
         return pipe
 
 
 class DeforumGenerationObject:
+    """
+    Class representing the generation object for Deforum animations.
 
+    This class contains all the required attributes and methods for defining, managing, and manipulating the animation generation object.
+    """
     def __init__(self, *args, **kwargs):
+        """
+        Initializes the generation object with default values and any provided arguments.
 
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
 
-        #placeholder to set defaults:
-
+        # Extract default values from various argument classes
         base_args = extract_values(DeforumArgs())
         anim_args = extract_values(DeforumAnimArgs())
         parseg_args = extract_values(ParseqArgs())
         loop_args = extract_values(LoopArgs())
         root = RootArgs()
         output_args_dict = {key: value["value"] for key, value in DeforumOutputArgs().items()}
-
         merged_args = {**base_args, **anim_args, **parseg_args, **loop_args, **output_args_dict, **root}
+
+        # Set all default values as attributes
         for key, value in merged_args.items():
             setattr(self, key, value)
 
@@ -129,16 +154,14 @@ class DeforumGenerationObject:
         self.timestring = time.strftime('%Y%m%d%H%M%S')
         #current_arg_list = [deforum.args, deforum.anim_args, deforum.video_args, deforum.parseq_args]
         full_base_folder_path = os.path.join(root_path, "output/deforum")
-
-
         self.raw_batch_name = self.batch_name
         #self.batch_name = substitute_placeholders(deforum.args.batch_name, current_arg_list,
         #                                                  full_base_folder_path)
         self.batch_name = f"Deforum_{self.timestring}"
         self.outdir = os.path.join(full_base_folder_path, str(self.batch_name))
-
         os.makedirs(self.outdir, exist_ok=True)
 
+        # Handle seed initialization
         if self.seed == -1 or self.seed == "-1":
             setattr(self, "seed", secrets.randbelow(999999999999999999))
             setattr(self, "raw_seed", int(self.seed))
@@ -146,10 +169,11 @@ class DeforumGenerationObject:
         else:
             self.seed = int(self.seed)
 
+
+
+        # Further attribute initializations
         self.prompts = None
         self.frame_interpolation_engine = None
-
-        # initialize vars
         self.prev_img = None
         self.color_match_sample = None
         self.start_frame = 0
@@ -163,29 +187,63 @@ class DeforumGenerationObject:
         self.contrast = 1.0
         self.hybrid_use_full_video = False
         self.turbo_steps = self.diffusion_cadence
-        # Setting all kwargs as attributes
+
+        # Set all provided keyword arguments as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def get(self, attribute, default=None):
-            return getattr(self, attribute, default)
+        """
+        Retrieve the value of a specified attribute or a default value if not present.
 
-    def to_dict(self):
-        """Returns all instance attributes as a dictionary."""
+        Args:
+            attribute (str): Name of the attribute to retrieve.
+            default (any, optional): Default value to return if attribute is not present.
+
+        Returns:
+            any: Value of the attribute or the default value.
+        """
+        return getattr(self, attribute, default)
+
+    def to_dict(self) -> dict:
+        """
+        Convert all instance attributes to a dictionary.
+
+        Returns:
+            dict: Dictionary containing all instance attributes.
+        """
         return self.__dict__.copy()
 
     def update_from_kwargs(self, *args, **kwargs):
+        """
+        Update object attributes using provided keyword arguments.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+        """
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     @classmethod
-    def from_settings_file(cls, settings_file_path: str = None):
+    def from_settings_file(cls, settings_file_path: str = None) -> 'DeforumGenerationObject':
+        """
+        Create an instance of the generation object using settings from a provided file.
+
+        Args:
+            settings_file_path (str, optional): Path to the settings file.
+
+        Returns:
+            DeforumGenerationObject: Initialized generation object instance.
+
+        Raises:
+            ValueError: If the provided file type is unsupported.
+        """
         instance = cls()
 
+        # Load data from provided file
         if settings_file_path and os.path.isfile(settings_file_path):
             file_ext = os.path.splitext(settings_file_path)[1]
-
-            # Load data based on file type
             if file_ext == '.json':
                 with open(settings_file_path, 'r') as f:
                     data = json.load(f)
@@ -196,27 +254,54 @@ class DeforumGenerationObject:
             else:
                 raise ValueError("Unsupported file type")
 
-            # Set attributes based on loaded data
+            # Update instance attributes using loaded data
             for key, value in data.items():
                 setattr(instance, key, value)
 
+        # Additional attribute updates based on loaded data
         if hasattr(instance, "diffusion_cadence"):
             instance.turbo_steps =  int(instance.diffusion_cadence)
-
-        if hasattr(instance, "using_video_init"):
-            if instance.using_video_init:
-                instance.turbo_steps = 1
-        if instance.prompts != None:
+        if hasattr(instance, "using_video_init") and instance.using_video_init:
+            instance.turbo_steps = 1
+        if instance.prompts is not None:
             instance.animation_prompts = instance.prompts
+
         return instance
 
 
-class DeforumKeyFrame:
 
-    def get(self, attribute, default=None):
-            return getattr(self, attribute, default)
+class DeforumKeyFrame:
+    """
+    Class representing the key frame for Deforum animations.
+
+    This class contains attributes that define a specific frame's characteristics in the Deforum animation process.
+    """
+
+    def get(self, attribute, default=None) -> any:
+        """
+        Retrieve the value of a specified attribute or a default value if not present.
+
+        Args:
+            attribute (str): Name of the attribute to retrieve.
+            default (any, optional): Default value to return if attribute is not present.
+
+        Returns:
+            any: Value of the attribute or the default value.
+        """
+        return getattr(self, attribute, default)
+
     @classmethod
-    def from_keys(cls, keys, frame_idx):
+    def from_keys(cls, keys, frame_idx) -> 'DeforumKeyFrame':
+        """
+        Create an instance of the key frame object using settings from provided keys and frame index.
+
+        Args:
+            keys: Object containing animation schedule series attributes.
+            frame_idx (int): Index of the frame to retrieve settings for.
+
+        Returns:
+            DeforumKeyFrame: Initialized key frame object instance.
+        """
         instance = cls()
         instance.noise = keys.noise_schedule_series[frame_idx]
         instance.strength = keys.strength_schedule_series[frame_idx]
@@ -243,20 +328,35 @@ class DeforumKeyFrame:
         instance.scheduled_noise_multiplier = None
         instance.scheduled_ddim_eta = None
         instance.scheduled_ancestral_eta = None
-
         return instance
 
 
 class Logger:
+    """
+    Logger class for logging messages to a file with optional timestamps.
+
+    Provides functionalities to start a logging session, log messages, and close the logging session.
+    """
+
     def __init__(self, root_path: str):
+        """
+        Initialize the Logger object.
+
+        Args:
+            root_path (str): Root directory path where the log files will be stored.
+        """
         self.root_path = root_path
         self.log_file = None
         self.current_datetime = datetime.now()
         self.timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.terminal_width = self.get_terminal_width()
 
-    def get_terminal_width(self):
-        """Get the width of the terminal."""
+    def get_terminal_width(self) -> int:
+        """Get the width of the terminal.
+
+        Returns:
+            int: Width of the terminal, or a default width if the terminal size cannot be determined.
+        """
         try:
             import shutil
             return shutil.get_terminal_size().columns
@@ -265,75 +365,106 @@ class Logger:
             return 80
 
     def start_session(self):
+        """Start a logging session by creating or appending to a log file."""
         year, month, day = self.current_datetime.strftime('%Y'), self.current_datetime.strftime(
             '%m'), self.current_datetime.strftime('%d')
         log_path = os.path.join(self.root_path, 'logs', year, month, day)
         os.makedirs(log_path, exist_ok=True)
 
         self.log_file = open(os.path.join(log_path, f"metrics_{self.timestamp}.log"), "a")
-
         self.log_file.write("=" * self.terminal_width + "\n")
         self.log_file.write("Log Session Started: " + self.timestamp.center(self.terminal_width - 20) + "\n")
         self.log_file.write("=" * self.terminal_width + "\n")
 
     def log(self, message: str, timestamped: bool = True):
+        """
+        Log a message to the log file.
+
+        Args:
+            message (str): The message to be logged.
+            timestamped (bool, optional): If True, add a timestamp prefix to the message. Default is True.
+        """
         if timestamped:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             message = f"[{timestamp}] {message}"
 
         # Wrap the message to the terminal width
         wrapped_text = "\n".join(textwrap.wrap(message, width=self.terminal_width))
-
         self.log_file.write(f"{wrapped_text}\n")
 
     def __call__(self, message: str, timestamped: bool = True, *args, **kwargs):
+        """Allow the Logger object to be called as a function."""
         self.log(message, timestamped)
 
     def close_session(self):
+        """End the logging session and close the log file."""
         if self.log_file:
             self.log_file.write("\n" + "=" * self.terminal_width + "\n")
             self.log_file.write("Log Session Ended".center(self.terminal_width) + "\n")
             self.log_file.write("=" * self.terminal_width + "\n")
             self.log_file.close()
 
-class DeforumPipeline(DeforumBase):
+# class DeforumPipeline(DeforumBase):
+#
+#     def __init__(self,
+#                  generator:Callable,
+#                  logger:Optional[Callable]=None):
+#
+#         super().__init__()
+#
+#         # assert generator in available_engine_classes, f"Make sure to use one of the available engines: {available_engine_classes}"
+#
+#         self.generator = generator
+#         self.logger = logger
+#
+#         self.prep_fns = []
+#         self.shoot_fns = []
+#         self.post_fns = []
 
-    def __init__(self,
-                 generator:Callable,
-                 logger:Optional[Callable]=None):
 
+
+class DeforumAnimationPipeline(DeforumBase):
+    """
+    Animation pipeline for Deforum.
+
+    Provides a mechanism to run an animation generation process using the provided generator.
+    Allows for pre-processing, main loop, and post-processing steps.
+    Uses a logger to record the metrics and timings of each step in the pipeline.
+    """
+    def __init__(self, generator: Callable, logger: Optional[Callable] = None):
+        """
+        Initialize the DeforumAnimationPipeline.
+
+        Args:
+            generator (Callable): The generator function for producing animations.
+            logger (Optional[Callable], optional): Optional logger function. Defaults to None.
+        """
         super().__init__()
 
-        # assert generator in available_engine_classes, f"Make sure to use one of the available engines: {available_engine_classes}"
-
         self.generator = generator
-        self.logger = logger
 
-        self.prep_fns = []
-        self.shoot_fns = []
-        self.post_fns = []
+        if logger == None:
+            self.logger = Logger(root_path)
+        else:
+            self.logger = logger
 
-
-
-class DeforumAnimationPipeline(DeforumPipeline):
-
-    def __init__(self,
-                 generator: Callable,
-                 logger: Optional[Callable]=None
-                 ):
-        super().__init__(generator, logger or Logger(root_path))
         self.prep_fns = []
         self.shoot_fns = []
         self.post_fns = []
         self.images = []
 
-    def __call__(self,
-                 settings_file:str=None,
-                 *args,
-                 **kwargs) -> DeforumGenerationObject:
+    def __call__(self, settings_file: str = None, *args, **kwargs) -> DeforumGenerationObject:
+        """
+        Execute the animation pipeline.
 
-        # Function to log metrics to a timestamped file
+        Args:
+            settings_file (str, optional): Path to the settings file. Defaults to None.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
 
+        Returns:
+            DeforumGenerationObject: The generated object after the pipeline execution.
+        """
         self.logger.start_session()
 
         start_total_time = time.time()
@@ -342,11 +473,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
         self.logger.log(f"Script startup / model loading took {duration:.2f} ms")
 
         if settings_file:
-            # try:
             self.gen = DeforumGenerationObject.from_settings_file(settings_file)
-            # except Exception as e:
-            #     print(e)
-            #     self.gen = DeforumGenerationObject(**kwargs)
         else:
             self.gen = DeforumGenerationObject(**kwargs)
 
@@ -462,7 +589,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
             # device = ('cpu' if cmd_opts.lowvram or cmd_opts.medvram else self.root.device)
             # TODO Set device in root in webui
             device = "cuda"
-            self.depth_model = DepthModel(self.gen.models_path, device, self.gen.half_precision,
+            self.depth_model = DepthModel(other_model_dir, device, self.gen.half_precision,
                                      keep_in_vram=self.gen.keep_in_vram,
                                      depth_algorithm=self.gen.depth_algorithm, Width=self.gen.W,
                                      Height=self.gen.H,
@@ -483,10 +610,14 @@ class DeforumAnimationPipeline(DeforumPipeline):
             print("[ Loading RAFT model ]")
             self.raft_model = RAFT()
 
-
-
     def setup(self, *args, **kwargs) -> None:
+        """
+        Set up the list of functions to be executed during the main loop of the animation pipeline.
 
+        This method populates the `shoot_fns` list with functions based on the configuration set in the `gen` object.
+        Certain functions are added to the list based on the conditions provided by the attributes of the `gen` object.
+        Additionally, post-processing functions can be added to the `post_fns` list.
+        """
         hybrid_available = self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in ['Optical Flow', 'Affine', 'Perspective']
 
         turbo_steps = self.gen.get('turbo_steps', 1)
@@ -553,7 +684,15 @@ class DeforumAnimationPipeline(DeforumPipeline):
         pass
 
     def generate(self):
+        """
+        Generates an image or animation using the given prompts, settings, and generator.
 
+        This method sets up the necessary arguments, handles conditional configurations, and then
+        uses the provided generator to produce the output.
+
+        Returns:
+            processed (Image): The generated image or animation frame.
+        """
         assert self.gen.prompt is not None
 
         # Setup the pipeline
@@ -867,642 +1006,6 @@ class DeforumAnimationPipeline(DeforumPipeline):
 
         return processed
 
-def anim_frame_warp_cls(cls):
-    if cls.gen.prev_img is not None:
-        mask = None
-        if cls.gen.use_depth_warping:
-            if cls.gen.depth is None and cls.depth_model is not None:
-                cls.gen.depth = cls.depth_model.predict(cls.gen.opencv_image, cls.gen.midas_weight, cls.gen.half_precision)
-        else:
-            depth = None
 
-        if cls.gen.animation_mode == '2D':
-            cls.gen.prev_img = anim_frame_warp_2d_cls(cls, cls.gen.prev_img)
-        else:  # '3D'
-            cls.gen.prev_img, cls.gen.mask = anim_frame_warp_3d_cls(cls, cls.gen.prev_img)
-    return
-def anim_frame_warp_cls_image(cls, image):
-    if image is not None:
-        mask = None
-        if cls.gen.use_depth_warping:
-            if cls.gen.depth is None and cls.depth_model is not None:
-                cls.gen.depth = cls.depth_model.predict(image, cls.gen.midas_weight, cls.gen.half_precision)
-        else:
-            depth = None
-
-        if cls.gen.animation_mode == '2D':
-            image = anim_frame_warp_2d_cls(cls, image)
-        else:  # '3D'
-            image, mask = anim_frame_warp_3d_cls(cls, image)
-    return image, mask
-
-def anim_frame_warp_2d_cls(cls, image):
-    angle = cls.gen.keys.angle_series[cls.gen.frame_idx]
-    zoom = cls.gen.keys.zoom_series[cls.gen.frame_idx]
-    translation_x = cls.gen.keys.translation_x_series[cls.gen.frame_idx]
-    translation_y = cls.gen.keys.translation_y_series[cls.gen.frame_idx]
-    transform_center_x = cls.gen.keys.transform_center_x_series[cls.gen.frame_idx]
-    transform_center_y = cls.gen.keys.transform_center_y_series[cls.gen.frame_idx]
-    center_point = (cls.gen.W * transform_center_x, cls.gen.H * transform_center_y)
-    rot_mat = cv2.getRotationMatrix2D(center_point, angle, zoom)
-    trans_mat = np.float32([[1, 0, translation_x], [0, 1, translation_y]])
-    trans_mat = np.vstack([trans_mat, [0,0,1]])
-    rot_mat = np.vstack([rot_mat, [0,0,1]])
-    if cls.gen.enable_perspective_flip:
-        bM = get_flip_perspective_matrix(cls.gen.W, cls.gen.H, cls.gen.keys, cls.gen.frame_idx)
-        rot_mat = np.matmul(bM, rot_mat, trans_mat)
-    else:
-        rot_mat = np.matmul(rot_mat, trans_mat)
-    return cv2.warpPerspective(
-        image,
-        rot_mat,
-        (image.shape[1], image.shape[0]),
-        borderMode=cv2.BORDER_WRAP if cls.gen.border == 'wrap' else cv2.BORDER_REPLICATE
-    )
-
-def anim_frame_warp_3d_cls(cls, image):
-    TRANSLATION_SCALE = 1.0 / 200.0  # matches Disco
-    translate_xyz = [
-        -cls.gen.keys.translation_x_series[cls.gen.frame_idx] * TRANSLATION_SCALE,
-        cls.gen.keys.translation_y_series[cls.gen.frame_idx] * TRANSLATION_SCALE,
-        -cls.gen.keys.translation_z_series[cls.gen.frame_idx] * TRANSLATION_SCALE
-    ]
-    rotate_xyz = [
-        math.radians(cls.gen.keys.rotation_3d_x_series[cls.gen.frame_idx]),
-        math.radians(cls.gen.keys.rotation_3d_y_series[cls.gen.frame_idx]),
-        math.radians(cls.gen.keys.rotation_3d_z_series[cls.gen.frame_idx])
-    ]
-    if cls.gen.enable_perspective_flip:
-        image = flip_3d_perspective(cls.gen, image, cls.gen.keys, cls.gen.frame_idx)
-    rot_mat = p3d.euler_angles_to_matrix(torch.tensor(rotate_xyz, device="cuda"), "XYZ").unsqueeze(0)
-    result, mask = transform_image_3d_new(torch.device('cuda'), image, cls.gen.depth, rot_mat, translate_xyz,
-                                               cls.gen, cls.gen.keys, cls.gen.frame_idx)
-    torch.cuda.empty_cache()
-    return result, mask
-
-
-def hybrid_composite_cls(cls):
-    if cls.gen.prev_img is not None:
-        video_frame = os.path.join(cls.gen.outdir, 'inputframes',
-                                   get_frame_name(cls.gen.video_init_path) + f"{cls.gen.frame_idx:09}.jpg")
-        video_depth_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                                         get_frame_name(cls.gen.video_init_path) + f"_vid_depth{cls.gen.frame_idx:09}.jpg")
-        depth_frame = os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx - 1:09}.png")
-        mask_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                                  get_frame_name(cls.gen.video_init_path) + f"_mask{cls.gen.frame_idx:09}.jpg")
-        comp_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                                  get_frame_name(cls.gen.video_init_path) + f"_comp{cls.gen.frame_idx:09}.jpg")
-        prev_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                                  get_frame_name(cls.gen.video_init_path) + f"_prev{cls.gen.frame_idx:09}.jpg")
-        cls.gen.prev_img = cv2.cvtColor(cls.gen.prev_img, cv2.COLOR_BGR2RGB)
-        prev_img_hybrid = Image.fromarray(cls.gen.prev_img)
-        if cls.gen.hybrid_use_init_image:
-            video_image = load_image(cls.gen.init_image, cls.gen.init_image_box)
-        else:
-            video_image = Image.open(video_frame)
-        video_image = video_image.resize((cls.gen.W, cls.gen.H), PIL.Image.LANCZOS)
-        hybrid_mask = None
-
-        # composite mask types
-        if cls.gen.hybrid_comp_mask_type == 'Depth':  # get depth from last generation
-            hybrid_mask = Image.open(depth_frame)
-        elif cls.gen.hybrid_comp_mask_type == 'Video Depth':  # get video depth
-            video_depth = cls.depth_model.predict(np.array(video_image), cls.gen.midas_weight, cls.gen.half_precision)
-            cls.depth_model.save(video_depth_frame, video_depth)
-            hybrid_mask = Image.open(video_depth_frame)
-        elif cls.gen.hybrid_comp_mask_type == 'Blend':  # create blend mask image
-            hybrid_mask = Image.blend(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image),
-                                      cls.gen.hybrid_comp_schedules['mask_blend_alpha'])
-        elif cls.gen.hybrid_comp_mask_type == 'Difference':  # create difference mask image
-            hybrid_mask = ImageChops.difference(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image))
-
-        # optionally invert mask, if mask type is defined
-        if cls.gen.hybrid_comp_mask_inverse and cls.gen.hybrid_comp_mask_type != "None":
-            hybrid_mask = ImageOps.invert(hybrid_mask)
-
-        # if a mask type is selected, make composition
-        if hybrid_mask is None:
-            hybrid_comp = video_image
-        else:
-            # ensure grayscale
-            hybrid_mask = ImageOps.grayscale(hybrid_mask)
-            # equalization before
-            if cls.gen.hybrid_comp_mask_equalize in ['Before', 'Both']:
-                hybrid_mask = ImageOps.equalize(hybrid_mask)
-                # contrast
-            hybrid_mask = ImageEnhance.Contrast(hybrid_mask).enhance(cls.gen.hybrid_comp_schedules['mask_contrast'])
-            # auto contrast with cutoffs lo/hi
-            if cls.gen.hybrid_comp_mask_auto_contrast:
-                hybrid_mask = autocontrast_grayscale(np.array(hybrid_mask),
-                                                     cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_low'],
-                                                     cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_high'])
-                hybrid_mask = Image.fromarray(hybrid_mask)
-                hybrid_mask = ImageOps.grayscale(hybrid_mask)
-            if cls.gen.hybrid_comp_save_extra_frames:
-                hybrid_mask.save(mask_frame)
-                # equalization after
-            if cls.gen.hybrid_comp_mask_equalize in ['After', 'Both']:
-                hybrid_mask = ImageOps.equalize(hybrid_mask)
-                # do compositing and save
-            hybrid_comp = Image.composite(prev_img_hybrid, video_image, hybrid_mask)
-            if cls.gen.hybrid_comp_save_extra_frames:
-                hybrid_comp.save(comp_frame)
-
-        # final blend of composite with prev_img, or just a blend if no composite is selected
-        hybrid_blend = Image.blend(prev_img_hybrid, hybrid_comp, cls.gen.hybrid_comp_schedules['alpha'])
-        if cls.gen.hybrid_comp_save_extra_frames:
-            hybrid_blend.save(prev_frame)
-
-        cls.gen.prev_img = cv2.cvtColor(np.array(hybrid_blend), cv2.COLOR_RGB2BGR)
-
-    # restore to np array and return
-    return
-
-def affine_persp_motion(cls):
-    if cls.gen.hybrid_motion_use_prev_img:
-        matrix = get_matrix_for_hybrid_motion_prev(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles, cls.gen.prev_img,
-                                                   cls.gen.hybrid_motion)
-    else:
-        matrix = get_matrix_for_hybrid_motion(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                              cls.gen.hybrid_motion)
-    cls.gen.prev_img = image_transform_ransac(cls.gen.prev_img, matrix, cls.gen.hybrid_motion)
-    return
-def optical_flow_motion(cls):
-    if cls.gen.prev_img is not None:
-        if cls.gen.hybrid_motion_use_prev_img:
-            cls.gen.flow = get_flow_for_hybrid_motion_prev(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                                   cls.gen.hybrid_frame_path, cls.gen.prev_flow, cls.gen.prev_img,
-                                                   cls.gen.hybrid_flow_method, cls.raft_model,
-                                                   cls.gen.hybrid_flow_consistency,
-                                                   cls.gen.hybrid_consistency_blur,
-                                                   cls.gen.hybrid_comp_save_extra_frames)
-
-
-        else:
-            cls.gen.flow = get_flow_for_hybrid_motion(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles, cls.gen.hybrid_frame_path,
-                                              cls.gen.prev_flow, cls.gen.hybrid_flow_method, cls.raft_model,
-                                              cls.gen.hybrid_flow_consistency,
-                                              cls.gen.hybrid_consistency_blur,
-                                              cls.gen.hybrid_comp_save_extra_frames)
-        cls.gen.prev_img = image_transform_optical_flow(cls.gen.prev_img, cls.gen.flow, cls.gen.hybrid_comp_schedules['flow_factor'])
-        cls.gen.prev_flow = cls.gen.flow
-
-    return
-def color_match_cls(cls):
-    if cls.gen.color_match_sample is None and cls.gen.prev_img is not None:
-            cls.gen.color_match_sample = cls.gen.prev_img.copy()
-    elif cls.gen.prev_img is not None:
-        cls.gen.prev_img = maintain_colors(cls.gen.prev_img, cls.gen.color_match_sample, cls.gen.color_coherence)
-    return
-def set_contrast_image(cls):
-    if cls.gen.prev_img is not None:
-        # intercept and override to grayscale
-        if cls.gen.color_force_grayscale:
-            cls.gen.prev_img = cv2.cvtColor(cls.gen.prev_img, cv2.COLOR_BGR2GRAY)
-            cls.gen.prev_img = cv2.cvtColor(cls.gen.prev_img, cv2.COLOR_GRAY2BGR)
-
-        # apply scaling
-        cls.gen.contrast_image = (cls.gen.prev_img * cls.gen.contrast).round().astype(np.uint8)
-        # anti-blur
-        if cls.gen.amount > 0:
-            cls.gen.contrast_image = unsharp_mask(cls.gen.contrast_image, (cls.gen.kernel, cls.gen.kernel), cls.gen.sigma, cls.gen.amount, cls.gen.threshold,
-                                          cls.gen.mask_image if cls.gen.use_mask else None)
-    return
-def handle_noise_mask(cls):
-    cls.gen.noise_mask = compose_mask_with_check(cls.gen, cls.gen, cls.gen.noise_mask_seq, cls.gen.noise_mask_vals, Image.fromarray(
-        cv2.cvtColor(cls.gen.contrast_image, cv2.COLOR_BGR2RGB)))
-    return
-def add_noise_cls(cls):
-    if cls.gen.prev_img is not None:
-        noised_image = add_noise(cls.gen.contrast_image, cls.gen.noise, cls.gen.seed, cls.gen.noise_type,
-                                 (cls.gen.perlin_w, cls.gen.perlin_h, cls.gen.perlin_octaves,
-                                  cls.gen.perlin_persistence),
-                                 cls.gen.noise_mask, cls.gen.invert_mask)
-
-        # use transformed previous frame as init for current
-        cls.gen.use_init = True
-        cls.gen.init_sample = Image.fromarray(cv2.cvtColor(noised_image, cv2.COLOR_BGR2RGB))
-        cls.gen.strength = max(0.0, min(1.0, cls.gen.strength))
-    return
-def get_generation_params(cls):
-
-    frame_idx = cls.gen.frame_idx
-    keys = cls.gen.keys
-
-    # print(f"\033[36mAnimation frame: \033[0m{frame_idx}/{cls.gen.max_frames}  ")
-
-    cls.gen.noise = keys.noise_schedule_series[frame_idx]
-    cls.gen.strength = keys.strength_schedule_series[frame_idx]
-    cls.gen.scale = keys.cfg_scale_schedule_series[frame_idx]
-    cls.gen.contrast = keys.contrast_schedule_series[frame_idx]
-    cls.gen.kernel = int(keys.kernel_schedule_series[frame_idx])
-    cls.gen.sigma = keys.sigma_schedule_series[frame_idx]
-    cls.gen.amount = keys.amount_schedule_series[frame_idx]
-    cls.gen.threshold = keys.threshold_schedule_series[frame_idx]
-    cls.gen.cadence_flow_factor = keys.cadence_flow_factor_schedule_series[frame_idx]
-    cls.gen.redo_flow_factor = keys.redo_flow_factor_schedule_series[frame_idx]
-    cls.gen.hybrid_comp_schedules = {
-        "alpha": keys.hybrid_comp_alpha_schedule_series[frame_idx],
-        "mask_blend_alpha": keys.hybrid_comp_mask_blend_alpha_schedule_series[frame_idx],
-        "mask_contrast": keys.hybrid_comp_mask_contrast_schedule_series[frame_idx],
-        "mask_auto_contrast_cutoff_low": int(
-            keys.hybrid_comp_mask_auto_contrast_cutoff_low_schedule_series[frame_idx]),
-        "mask_auto_contrast_cutoff_high": int(
-            keys.hybrid_comp_mask_auto_contrast_cutoff_high_schedule_series[frame_idx]),
-        "flow_factor": keys.hybrid_flow_factor_schedule_series[frame_idx]
-    }
-    cls.gen.scheduled_sampler_name = None
-    cls.gen.scheduled_clipskip = None
-    cls.gen.scheduled_noise_multiplier = None
-    cls.gen.scheduled_ddim_eta = None
-    cls.gen.scheduled_ancestral_eta = None
-
-    cls.gen.mask_seq = None
-    cls.gen.noise_mask_seq = None
-    if cls.gen.enable_steps_scheduling and keys.steps_schedule_series[frame_idx] is not None:
-        cls.gen.steps = int(keys.steps_schedule_series[frame_idx])
-    if cls.gen.enable_sampler_scheduling and keys.sampler_schedule_series[frame_idx] is not None:
-        cls.gen.scheduled_sampler_name = keys.sampler_schedule_series[frame_idx].casefold()
-    if cls.gen.enable_clipskip_scheduling and keys.clipskip_schedule_series[frame_idx] is not None:
-        cls.gen.scheduled_clipskip = int(keys.clipskip_schedule_series[frame_idx])
-    if cls.gen.enable_noise_multiplier_scheduling and keys.noise_multiplier_schedule_series[
-        frame_idx] is not None:
-        cls.gen.scheduled_noise_multiplier = float(keys.noise_multiplier_schedule_series[frame_idx])
-    if cls.gen.enable_ddim_eta_scheduling and keys.ddim_eta_schedule_series[frame_idx] is not None:
-        cls.gen.scheduled_ddim_eta = float(keys.ddim_eta_schedule_series[frame_idx])
-    if cls.gen.enable_ancestral_eta_scheduling and keys.ancestral_eta_schedule_series[frame_idx] is not None:
-        cls.gen.scheduled_ancestral_eta = float(keys.ancestral_eta_schedule_series[frame_idx])
-    if cls.gen.use_mask and keys.mask_schedule_series[frame_idx] is not None:
-        cls.gen.mask_seq = keys.mask_schedule_series[frame_idx]
-    if cls.gen.use_noise_mask and keys.noise_mask_schedule_series[frame_idx] is not None:
-        cls.gen.noise_mask_seq = keys.noise_mask_schedule_series[frame_idx]
-
-    if cls.gen.use_mask and not cls.gen.use_noise_mask:
-        cls.gen.noise_mask_seq = cls.gen.mask_seq
-
-    cls.gen.depth = None
-
-    # Pix2Pix Image CFG Scale - does *nothing* with non pix2pix checkpoints
-    cls.gen.pix2pix_img_cfg_scale = float(cls.gen.keys.pix2pix_img_cfg_scale_series[cls.gen.frame_idx])
-
-    # grab prompt for current frame
-    cls.gen.prompt = cls.gen.prompt_series[cls.gen.frame_idx]
-
-    # if cls.gen.seed_behavior == 'schedule' or parseq_adapter.manages_seed():
-    #     cls.gen.seed = int(keys.seed_schedule_series[frame_idx])
-
-    if cls.gen.enable_checkpoint_scheduling:
-        cls.gen.checkpoint = cls.gen.keys.checkpoint_schedule_series[cls.gen.frame_idx]
-    else:
-        cls.gen.checkpoint = None
-
-    # SubSeed scheduling
-    if cls.gen.enable_subseed_scheduling:
-        cls.gen.subseed = int(cls.gen.keys.subseed_schedule_series[cls.gen.frame_idx])
-        cls.gen.subseed_strength = float(cls.gen.keys.subseed_strength_schedule_series[cls.gen.frame_idx])
-
-    # if parseq_adapter.manages_seed():
-    #     cls.gen.enable_subseed_scheduling = True
-    #     cls.gen.subseed = int(keys.subseed_schedule_series[frame_idx])
-    #     cls.gen.subseed_strength = keys.subseed_strength_schedule_series[frame_idx]
-
-    # set value back into the prompt - prepare and report prompt and seed
-    cls.gen.prompt = prepare_prompt(cls.gen.prompt, cls.gen.max_frames, cls.gen.seed, cls.gen.frame_idx)
-
-    # grab init image for current frame
-    if cls.gen.using_vid_init:
-        init_frame = get_next_frame(cls.gen.outdir, cls.gen.video_init_path, cls.gen.frame_idx, False)
-        # print(f"Using video init frame {init_frame}")
-        cls.gen.init_image = init_frame
-        cls.gen.init_image_box = None  # init_image_box not used in this case
-        cls.gen.strength = max(0.0, min(1.0, cls.gen.strength))
-    if cls.gen.use_mask_video:
-        cls.gen.mask_file = get_mask_from_file(get_next_frame(cls.gen.outdir, cls.gen.video_mask_path, cls.gen.frame_idx, True),
-                                            cls.gen)
-        cls.gen.noise_mask = get_mask_from_file(
-            get_next_frame(cls.gen.outdir, cls.gen.video_mask_path, cls.gen.frame_idx, True), cls.gen)
-
-        cls.gen.mask_vals['video_mask'] = get_mask_from_file(
-            get_next_frame(cls.gen.outdir, cls.gen.video_mask_path, cls.gen.frame_idx, True), cls.gen)
-
-    if cls.gen.use_mask:
-        cls.gen.mask_image = compose_mask_with_check(cls.gen, cls.gen, cls.gen.mask_seq, cls.gen.mask_vals,
-                                                  cls.gen.init_sample) if cls.gen.init_sample is not None else None  # we need it only after the first frame anyway
-
-    # setting up some arguments for the looper
-    cls.gen.imageStrength = cls.gen.loopSchedulesAndData.image_strength_schedule_series[cls.gen.frame_idx]
-    cls.gen.blendFactorMax = cls.gen.loopSchedulesAndData.blendFactorMax_series[cls.gen.frame_idx]
-    cls.gen.blendFactorSlope = cls.gen.loopSchedulesAndData.blendFactorSlope_series[cls.gen.frame_idx]
-    cls.gen.tweeningFrameSchedule = cls.gen.loopSchedulesAndData.tweening_frames_schedule_series[cls.gen.frame_idx]
-    cls.gen.colorCorrectionFactor = cls.gen.loopSchedulesAndData.color_correction_factor_series[cls.gen.frame_idx]
-    cls.gen.use_looper = cls.gen.loopSchedulesAndData.use_looper
-    cls.gen.imagesToKeyframe = cls.gen.loopSchedulesAndData.imagesToKeyframe
-
-    # if 'img2img_fix_steps' in opts.data and opts.data[
-    #     "img2img_fix_steps"]:  # disable "with img2img do exactly x steps" from general setting, as it *ruins* deforum animations
-    #     opts.data["img2img_fix_steps"] = False
-    # if scheduled_clipskip is not None:
-    #     opts.data["CLIP_stop_at_last_layers"] = scheduled_clipskip
-    # if scheduled_noise_multiplier is not None:
-    #     opts.data["initial_noise_multiplier"] = scheduled_noise_multiplier
-    # if scheduled_ddim_eta is not None:
-    #     opts.data["eta_ddim"] = scheduled_ddim_eta
-    # if scheduled_ancestral_eta is not None:
-    #     opts.data["eta_ancestral"] = scheduled_ancestral_eta
-
-    # if cls.gen.animation_mode == '3D' and (cmd_opts.lowvram or cmd_opts.medvram):
-    #     if predict_depths: depth_model.to('cpu')
-    #     devices.torch_gc()
-    #     lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
-    #     sd_hijack.model_hijack.hijack(sd_model)
-    return
-def optical_flow_redo(cls):
-    optical_flow_redo_generation = cls.gen.optical_flow_redo_generation  # if not cls.gen.motion_preview_mode else 'None'
-
-    # optical flow redo before generation
-    if optical_flow_redo_generation != 'None' and cls.gen.prev_img is not None and cls.gen.strength > 0:
-        stored_seed = cls.gen.seed
-        cls.gen.seed = random.randint(0, 2 ** 32 - 1)
-        # print(
-        #     f"Optical flow redo is diffusing and warping using {optical_flow_redo_generation} and seed {cls.gen.seed} optical flow before generation.")
-
-        disposable_image = cls.generate()
-
-        disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
-        disposable_flow = get_flow_from_images(cls.gen.prev_img, disposable_image, optical_flow_redo_generation, cls.raft_model)
-        disposable_image = cv2.cvtColor(disposable_image, cv2.COLOR_BGR2RGB)
-        disposable_image = image_transform_optical_flow(disposable_image, disposable_flow, cls.gen.redo_flow_factor)
-        cls.gen.seed = stored_seed
-        cls.gen.init_sample = Image.fromarray(disposable_image)
-        del (disposable_image, disposable_flow, stored_seed)
-        gc.collect()
-
-    return
-def diffusion_redo(cls):
-    if int(cls.gen.diffusion_redo) > 0 and cls.gen.prev_img is not None and cls.gen.strength > 0 and not cls.gen.motion_preview_mode:
-        stored_seed = cls.gen.seed
-        for n in range(0, int(cls.gen.diffusion_redo)):
-            # print(f"Redo generation {n + 1} of {int(cls.gen.diffusion_redo)} before final generation")
-            cls.gen.seed = random.randint(0, 2 ** 32 - 1)
-            disposable_image = cls.generate()
-            disposable_image = cv2.cvtColor(np.array(disposable_image), cv2.COLOR_RGB2BGR)
-            # color match on last one only
-            if n == int(cls.gen.diffusion_redo):
-                disposable_image = maintain_colors(cls.gen.prev_img, cls.gen.color_match_sample, cls.gen.color_coherence)
-            cls.gen.seed = stored_seed
-            cls.gen.init_sample = Image.fromarray(cv2.cvtColor(disposable_image, cv2.COLOR_BGR2RGB))
-        del (disposable_image, stored_seed)
-        gc.collect()
-
-    return
-def main_generate_with_cls(cls):
-    cls.gen.image = cls.generate()
-
-    return
-def post_hybrid_composite_cls(cls):
-    # do hybrid video after generation
-    if cls.gen.frame_idx > 0 and cls.gen.hybrid_composite == 'After Generation':
-        image = cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR)
-        cls.gen, image = hybrid_composite(cls.gen, cls.gen, cls.gen.frame_idx, image, cls.depth_model, cls.gen.hybrid_comp_schedules, cls.gen)
-        cls.gen.image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
-    return
-def post_color_match_with_cls(cls):
-    # color matching on first frame is after generation, color match was collected earlier, so we do an extra generation to avoid the corruption introduced by the color match of first output
-    if cls.gen.frame_idx == 0 and (cls.gen.color_coherence == 'Image' or (
-            cls.gen.color_coherence == 'Video Input' and cls.gen.hybrid_available)):
-        image = maintain_colors(cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR), cls.gen.color_match_sample,
-                                cls.gen.color_coherence)
-        cls.gen.image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    elif cls.gen.color_match_sample is not None and cls.gen.color_coherence != 'None' and not cls.gen.legacy_colormatch:
-        image = maintain_colors(cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR), cls.gen.color_match_sample,
-                                cls.gen.color_coherence)
-        cls.gen.image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    return
-def overlay_mask_cls(cls):
-    # intercept and override to grayscale
-    if cls.gen.color_force_grayscale:
-        image = ImageOps.grayscale(cls.gen.image)
-        cls.gen.image = ImageOps.colorize(image, black="black", white="white")
-
-    # overlay mask
-    if cls.gen.overlay_mask and (cls.gen.use_mask_video or cls.gen.use_mask):
-        cls.gen.image = do_overlay_mask(cls.gen, cls.gen, cls.gen.image, cls.gen.frame_idx)
-
-    # on strength 0, set color match to generation
-    if ((not cls.gen.legacy_colormatch and not cls.gen.use_init) or (
-            cls.gen.legacy_colormatch and cls.gen.strength == 0)) and not cls.gen.color_coherence in ['Image',
-                                                                                                  'Video Input']:
-        cls.gen.color_match_sample = cv2.cvtColor(np.asarray(cls.gen.image), cv2.COLOR_RGB2BGR)
-    return
-def post_gen_cls(cls):
-
-    if cls.gen.frame_idx < cls.gen.max_frames:
-
-        cls.gen.opencv_image = cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR)
-        cls.images.append(cls.gen.opencv_image.copy())
-
-        if not cls.gen.using_vid_init:
-            cls.gen.prev_img = cls.gen.opencv_image
-
-        if cls.gen.turbo_steps > 1:
-            cls.gen.turbo_prev_image, cls.gen.turbo_prev_frame_idx = cls.gen.turbo_next_image, cls.gen.turbo_next_frame_idx
-            cls.gen.turbo_next_image, cls.gen.turbo_next_frame_idx = cls.gen.opencv_image, cls.gen.frame_idx
-            cls.gen.frame_idx += cls.gen.turbo_steps
-        else:
-            filename = f"{cls.gen.timestring}_{cls.gen.frame_idx:09}.png"
-
-            #TODO IMPLEMENT CLS SAVING
-            if not cls.gen.store_frames_in_ram:
-
-                save_image(cls.gen.image, 'PIL', filename, cls.gen, cls.gen, cls.gen)
-
-            if cls.gen.save_depth_maps:
-                # if cmd_opts.lowvram or cmd_opts.medvram:
-                #     lowvram.send_everything_to_cpu()
-                #     sd_hijack.model_hijack.undo_hijack(sd_model)
-                #     devices.torch_gc()
-                #     depth_model.to(root.device)
-                cls.gen.depth = cls.depth_model.predict(cls.gen.opencv_image, cls.gen.midas_weight, cls.gen.half_precision)
-                cls.depth_model.save(os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx:09}.png"), cls.gen.depth)
-                # if cmd_opts.lowvram or cmd_opts.medvram:
-                #     depth_model.to('cpu')
-                #     devices.torch_gc()
-                #     lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
-                #     sd_hijack.model_hijack.hijack(sd_model)
-            cls.gen.frame_idx += 1
-        # state.assign_current_image(image)
-        done = cls.datacallback({"image": cls.gen.image})
-        #TODO IMPLEMENT CLS NEXT SEED
-        cls.gen.seed = next_seed(cls.gen, cls.gen)
-
-
-    return
-
-
-
-def make_cadence_frames(cls):
-    if cls.gen.turbo_steps > 1:
-        tween_frame_start_idx = max(cls.gen.start_frame, cls.gen.frame_idx - cls.gen.turbo_steps)
-        cadence_flow = None
-        for tween_frame_idx in range(tween_frame_start_idx, cls.gen.frame_idx):
-            # update progress during cadence
-            # state.job = f"frame {tween_frame_idx + 1}/{cls.gen.max_frames}"
-            # state.job_no = tween_frame_idx + 1
-            # cadence vars
-            tween = float(tween_frame_idx - tween_frame_start_idx + 1) / float(cls.gen.frame_idx - tween_frame_start_idx)
-            advance_prev = cls.gen.turbo_prev_image is not None and tween_frame_idx > cls.gen.turbo_prev_frame_idx
-            advance_next = tween_frame_idx > cls.gen.turbo_next_frame_idx
-
-            # optical flow cadence setup before animation warping
-            if cls.gen.animation_mode in ['2D', '3D'] and cls.gen.optical_flow_cadence != 'None':
-                if cls.gen.keys.strength_schedule_series[tween_frame_start_idx] > 0:
-                    if cadence_flow is None and cls.gen.turbo_prev_image is not None and cls.gen.turbo_next_image is not None:
-                        cadence_flow = get_flow_from_images(cls.gen.turbo_prev_image, cls.gen.turbo_next_image,
-                                                            cls.gen.optical_flow_cadence, cls.raft_model) / 2
-                        turbo_next_image = image_transform_optical_flow(cls.gen.turbo_next_image, -cadence_flow, 1)
-
-                # if opts.data.get("deforum_save_gen_info_as_srt"):
-                #     params_to_print = opts.data.get("deforum_save_gen_info_as_srt_params", ['Seed'])
-                #     params_string = format_animation_params(keys, prompt_series, tween_frame_idx, params_to_print)
-                #     write_frame_subtitle(srt_filename, tween_frame_idx, srt_frame_duration,
-                #                          f"F#: {tween_frame_idx}; Cadence: {tween < 1.0}; Seed: {cls.gen.seed}; {params_string}")
-                params_string = None
-
-            # print(
-            #     f"Creating in-between {'' if cadence_flow is None else cls.gen.optical_flow_cadence + ' optical flow '}cadence frame: {tween_frame_idx}; tween:{tween:0.2f};")
-
-            if cls.depth_model is not None:
-                assert (cls.gen.turbo_next_image is not None)
-                depth = cls.depth_model.predict(cls.gen.turbo_next_image, cls.gen.midas_weight, cls.gen.half_precision)
-
-            if advance_prev:
-                cls.gen.turbo_prev_image, _ = anim_frame_warp_cls_image(cls, cls.gen.turbo_prev_image)
-            if advance_next:
-                cls.gen.turbo_next_image, _ = anim_frame_warp_cls_image(cls, cls.gen.turbo_prev_image)
-
-            # hybrid video motion - warps turbo_prev_image or turbo_next_image to match motion
-            if tween_frame_idx > 0:
-                if cls.gen.hybrid_motion in ['Affine', 'Perspective']:
-                    if cls.gen.hybrid_motion_use_prev_img:
-                        matrix = get_matrix_for_hybrid_motion_prev(tween_frame_idx - 1, (cls.gen.W, cls.gen.H),
-                                                                   cls.gen.inputfiles, cls.gen.prev_img, cls.gen.hybrid_motion)
-                        if advance_prev:
-                            cls.gen.turbo_prev_image = image_transform_ransac(cls.gen.turbo_prev_image, matrix,
-                                                                      cls.gen.hybrid_motion)
-                        if advance_next:
-                            cls.gen.turbo_next_image = image_transform_ransac(cls.gen.turbo_next_image, matrix,
-                                                                      cls.gen.hybrid_motion)
-                    else:
-                        matrix = get_matrix_for_hybrid_motion(tween_frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                                              cls.gen.hybrid_motion)
-                        if advance_prev:
-                            cls.gen.turbo_prev_image = image_transform_ransac(cls.gen.turbo_prev_image, matrix,
-                                                                      cls.gen.hybrid_motion)
-                        if advance_next:
-                            cls.gen.turbo_next_image = image_transform_ransac(cls.gen.turbo_next_image, matrix,
-                                                                      cls.gen.hybrid_motion)
-                if cls.gen.hybrid_motion in ['Optical Flow']:
-                    if cls.gen.hybrid_motion_use_prev_img:
-                        cls.gen.flow = get_flow_for_hybrid_motion_prev(tween_frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                                               cls.gen.hybrid_frame_path, cls.gen.prev_flow, cls.gen.prev_img,
-                                                               cls.gen.hybrid_flow_method, cls.raft_model,
-                                                               cls.gen.hybrid_flow_consistency,
-                                                               cls.gen.hybrid_consistency_blur,
-                                                               cls.gen.hybrid_comp_save_extra_frames)
-                        if advance_prev:
-                            cls.gen.turbo_prev_image = image_transform_optical_flow(cls.gen.turbo_prev_image, cls.gen.flow,
-                                                                            cls.gen.hybrid_comp_schedules['flow_factor'])
-                        if advance_next:
-                            cls.gen.turbo_next_image = image_transform_optical_flow(cls.gen.turbo_next_image, cls.gen.flow,
-                                                                            cls.gen.hybrid_comp_schedules['flow_factor'])
-                        cls.gen.prev_flow = cls.gen.flow
-                    else:
-                        cls.gen.flow = get_flow_for_hybrid_motion(tween_frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                                          cls.gen.hybrid_frame_path, cls.gen.prev_flow,
-                                                          cls.gen.hybrid_flow_method, cls.raft_model,
-                                                          cls.gen.hybrid_flow_consistency,
-                                                          cls.gen.hybrid_consistency_blur,
-                                                          cls.gen.hybrid_comp_save_extra_frames)
-                        if advance_prev:
-                            cls.gen.turbo_prev_image = image_transform_optical_flow(cls.gen.turbo_prev_image, cls.gen.flow,
-                                                                            cls.gen.hybrid_comp_schedules['flow_factor'])
-                        if advance_next:
-                            cls.gen.turbo_next_image = image_transform_optical_flow(cls.gen.turbo_next_image, cls.gen.flow,
-                                                                            cls.gen.hybrid_comp_schedules['flow_factor'])
-                        cls.gen.prev_flow = cls.gen.flow
-
-            # do optical flow cadence after animation warping
-            if cadence_flow is not None:
-                cadence_flow = abs_flow_to_rel_flow(cadence_flow, cls.gen.W, cls.gen.H)
-                cadence_flow, _, _ = anim_frame_warp(cadence_flow, cls.gen, cls.gen, cls.gen.keys, tween_frame_idx, cls.depth_model,
-                                                     depth=depth, device=cls.gen.device,
-                                                     half_precision=cls.gen.half_precision)
-                cadence_flow_inc = rel_flow_to_abs_flow(cadence_flow, cls.gen.W, cls.gen.H) * tween
-                if advance_prev:
-                    cls.gen.turbo_prev_image = image_transform_optical_flow(cls.gen.turbo_prev_image, cadence_flow_inc,
-                                                                    cls.gen.cadence_flow_factor)
-                if advance_next:
-                    cls.gen.turbo_next_image = image_transform_optical_flow(cls.gen.turbo_next_image, cadence_flow_inc,
-                                                                    cls.gen.cadence_flow_factor)
-
-            cls.gen.turbo_prev_frame_idx = cls.gen.turbo_next_frame_idx = tween_frame_idx
-
-            if cls.gen.turbo_prev_image is not None and tween < 1.0:
-                cls.gen.img = cls.gen.turbo_prev_image * (1.0 - tween) + cls.gen.turbo_next_image * tween
-            else:
-                cls.gen.img = cls.gen.turbo_next_image
-
-            # intercept and override to grayscale
-            if cls.gen.color_force_grayscale:
-                cls.gen.img = cv2.cvtColor(cls.gen.img.astype(np.uint8), cv2.COLOR_BGR2GRAY)
-                cls.gen.img = cv2.cvtColor(cls.gen.img, cv2.COLOR_GRAY2BGR)
-
-                # overlay mask
-            if cls.gen.overlay_mask and (cls.gen.use_mask_video or cls.gen.use_mask):
-                cls.gen.img = do_overlay_mask(cls.gen, cls.gen, cls.gen.img, tween_frame_idx, True)
-
-            # get prev_img during cadence
-            cls.gen.prev_img = cls.gen.img
-
-            # current image update for cadence frames (left commented because it doesn't currently update the preview)
-            # state.current_image = Image.fromarray(cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2RGB))
-
-            # saving cadence frames
-            if not cls.gen.store_frames_in_ram:
-                filename = f"{cls.gen.timestring}_{tween_frame_idx:09}.png"
-                cv2.imwrite(os.path.join(cls.gen.outdir, filename), cls.gen.img)
-            done = cls.datacallback({"cadence_frame": Image.fromarray(cls.gen.img)})
-
-            if cls.gen.save_depth_maps:
-                cls.depth_model.save(os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{tween_frame_idx:09}.png"),
-                                 depth)
-
-
-def color_match_video_input(cls):
-    if int(cls.gen.frame_idx) % int(cls.gen.color_coherence_video_every_N_frames) == 0:
-        prev_vid_img = Image.open(os.path.join(cls.outdir, 'inputframes', get_frame_name(
-            cls.video_init_path) + f"{cls.gen.frame_idx:09}.jpg"))
-        cls.gen.prev_vid_img = prev_vid_img.resize((cls.W, cls.H), PIL.Image.LANCZOS)
-        color_match_sample = np.asarray(cls.gen.prev_vid_img)
-        cls.gen.color_match_sample = cv2.cvtColor(color_match_sample, cv2.COLOR_RGB2BGR)
-
-
-def film_interpolate_cls(cls):
-    # "frame_interpolation_engine": "FILM",
-    # "frame_interpolation_x_amount": 2,
-    # "frame_interpolation_slow_mo_enabled": false,
-    # "frame_interpolation_slow_mo_amount": 2,
-    # "frame_interpolation_keep_imgs": false,
-    # "frame_interpolation_use_upscaled": false,
-    dir_path = os.path.join(root_path, 'output/video')
-    os.makedirs(dir_path, exist_ok=True)
-    output_filename_base = os.path.join(dir_path, cls.gen.timestring)
-    interpolator = Interpolator()
-
-    film_in_between_frames_count = calculate_frames_to_add(len(cls.images), cls.gen.frame_interpolation_x_amount)
-    print("Interpolating with", film_in_between_frames_count)
-    interpolated = interpolator(cls.images, film_in_between_frames_count)
-    save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
 
 

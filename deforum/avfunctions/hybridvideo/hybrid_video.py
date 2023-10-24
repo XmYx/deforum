@@ -12,8 +12,8 @@ from deforum.avfunctions.interpolation.consistency_check import make_consistency
 from deforum.avfunctions.masks.human_masking import video2humanmasks
 from deforum.avfunctions.image.load_images import load_image
 from deforum.avfunctions.video_audio_utilities import vid2frames, get_quick_vid_info, get_frame_name
-#from modules.shared import opts
 
+#from modules.shared import opts
 # DEBUG_MODE = opts.data.get("deforum_debug_mode_enabled", False)
 
 def delete_all_imgs_in_folder(folder_path):
