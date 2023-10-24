@@ -63,7 +63,8 @@ class DeforumBase:
                      modelid:str=None,
                      generator:str="comfy",
                      pipeline:str="DeforumAnimationPipeline",
-                     cache_dir:str=default_cache_folder):
+                     cache_dir:str=default_cache_folder,
+                     lcm=False):
 
         from deforum import available_engines
         assert generator in available_engines, f"Make sure to use one of the available engines: {available_engines}"
@@ -87,11 +88,11 @@ class DeforumBase:
             model_path = None
         from deforum import ComfyDeforumGenerator
 
-        generator = ComfyDeforumGenerator(model_path=model_path)
+        generator = ComfyDeforumGenerator(model_path=model_path, lcm=lcm)
 
         deforum_module = importlib.import_module(cls.__module__.split(".")[0])
 
-        print(cls.__name__)
+        # print(cls.__name__)
 
         #pipeline_class = getattr(deforum_module, pipeline)
         pipeline_class = getattr(deforum_module, cls.__name__)
@@ -157,7 +158,7 @@ class DeforumGenerationObject:
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
         self.contrast = 1.0
-        self.hybrid_use_full_video = False
+        self.hybrid_use_full_video = True
         self.turbo_steps = self.diffusion_cadence
         # Setting all kwargs as attributes
         for key, value in kwargs.items():
@@ -425,6 +426,8 @@ class DeforumAnimationPipeline(DeforumPipeline):
             # handle hybrid video generation
             if self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in hybrid_motion_modes:
                 _, _, self.gen.inputfiles = hybrid_generation(self.gen, self.gen, self.gen)
+                self.gen.hybrid_frame_path = os.path.join(self.gen.outdir, 'hybridframes')
+
         if int(self.gen.seed) == -1:
             self.gen.seed = secrets.randbelow(18446744073709551615)
         self.gen.max_frames += 1
@@ -497,7 +500,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
         if self.gen.hybrid_motion in ['Affine', 'Perspective']:
             self.shoot_fns.append(affine_persp_motion)
 
-        if self.gen.hybrid_motion is ['Optical Flow']:
+        if self.gen.hybrid_motion in ['Optical Flow']:
             self.shoot_fns.append(optical_flow_motion)
 
         if self.gen.hybrid_composite == 'Normal':
@@ -1018,23 +1021,24 @@ def affine_persp_motion(cls):
     cls.gen.prev_img = image_transform_ransac(cls.gen.prev_img, matrix, cls.gen.hybrid_motion)
     return
 def optical_flow_motion(cls):
-    if cls.gen.hybrid_motion_use_prev_img:
-        cls.gen.flow = get_flow_for_hybrid_motion_prev(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
-                                               cls.gen.hybrid_frame_path, cls.gen.prev_flow, cls.gen.prev_img,
-                                               cls.gen.hybrid_flow_method, cls.raft_model,
-                                               cls.gen.hybrid_flow_consistency,
-                                               cls.gen.hybrid_consistency_blur,
-                                               cls.gen.hybrid_comp_save_extra_frames)
+    if cls.gen.prev_img is not None:
+        if cls.gen.hybrid_motion_use_prev_img:
+            cls.gen.flow = get_flow_for_hybrid_motion_prev(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles,
+                                                   cls.gen.hybrid_frame_path, cls.gen.prev_flow, cls.gen.prev_img,
+                                                   cls.gen.hybrid_flow_method, cls.raft_model,
+                                                   cls.gen.hybrid_flow_consistency,
+                                                   cls.gen.hybrid_consistency_blur,
+                                                   cls.gen.hybrid_comp_save_extra_frames)
 
 
-    else:
-        cls.gen.flow = get_flow_for_hybrid_motion(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles, cls.gen.hybrid_frame_path,
-                                          cls.gen.prev_flow, cls.gen.hybrid_flow_method, cls.raft_model,
-                                          cls.gen.hybrid_flow_consistency,
-                                          cls.gen.hybrid_consistency_blur,
-                                          cls.gen.hybrid_comp_save_extra_frames)
-    cls.gen.prev_img = image_transform_optical_flow(cls.gen.prev_img, cls.gen.flow, cls.gen.hybrid_comp_schedules['flow_factor'])
-    cls.gen.prev_flow = cls.gen.flow
+        else:
+            cls.gen.flow = get_flow_for_hybrid_motion(cls.gen.frame_idx - 1, (cls.gen.W, cls.gen.H), cls.gen.inputfiles, cls.gen.hybrid_frame_path,
+                                              cls.gen.prev_flow, cls.gen.hybrid_flow_method, cls.raft_model,
+                                              cls.gen.hybrid_flow_consistency,
+                                              cls.gen.hybrid_consistency_blur,
+                                              cls.gen.hybrid_comp_save_extra_frames)
+        cls.gen.prev_img = image_transform_optical_flow(cls.gen.prev_img, cls.gen.flow, cls.gen.hybrid_comp_schedules['flow_factor'])
+        cls.gen.prev_flow = cls.gen.flow
 
     return
 def color_match_cls(cls):

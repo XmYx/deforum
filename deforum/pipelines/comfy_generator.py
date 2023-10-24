@@ -180,18 +180,27 @@ comfy.k_diffusion.sampling.BatchedBrownianTree = DeforumBatchedBrownianTree
 
 class ComfyDeforumGenerator:
 
-    def __init__(self, model_path:str=None):
+    def __init__(self, model_path:str=None, lcm=False):
         #from comfy import model_management, controlnet
 
         #model_management.vram_state = model_management.vram_state.HIGH_VRAM
         self.clip_skip = -2
         self.device = "cuda"
-        if model_path == None:
-            models_dir = os.path.join(default_cache_folder)
-            fetch_and_download_model(125703, default_cache_folder)
-            model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
 
-        self.load_model(model_path)
+        if not lcm:
+            if model_path == None:
+                models_dir = os.path.join(default_cache_folder)
+                fetch_and_download_model(125703, default_cache_folder)
+                model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
+
+            self.load_model(model_path)
+
+            self.pipeline_type = "comfy"
+
+        else:
+            self.load_lcm()
+
+            self.pipeline_type = "diffusers_lcm"
 
         # self.controlnet = controlnet.load_controlnet(model_name)
 
@@ -234,6 +243,33 @@ class ComfyDeforumGenerator:
         # model_path = os.path.join(root_path, "models/checkpoints/SSD-1B")
         # self.model, self.clip, self.vae = comfy.diffusers_load.load_diffusers(model_path, output_vae=True, output_clip=True,
         #                                     embedding_directory="models/embeddings")
+    def load_lcm(self):
+        from deforum.lcm.lcm_pipeline import LatentConsistencyModelPipeline
+
+        from deforum.lcm.lcm_scheduler import LCMScheduler
+        self.scheduler = LCMScheduler.from_pretrained(
+            os.path.join(root_path, "configs/lcm_scheduler.json"))
+
+        self.pipe = LatentConsistencyModelPipeline.from_pretrained(
+            pretrained_model_name_or_path="SimianLuo/LCM_Dreamshaper_v7",
+            scheduler=self.scheduler
+        ).to("cuda")
+        from deforum.lcm.lcm_i2i_pipeline import LatentConsistencyModelImg2ImgPipeline
+        # self.img2img_pipe = LatentConsistencyModelImg2ImgPipeline(
+        #     unet=self.pipe.unet,
+        #     vae=self.pipe.vae,
+        #     text_encoder=self.pipe.text_encoder,
+        #     tokenizer=self.pipe.tokenizer,
+        #     scheduler=self.pipe.scheduler,
+        #     feature_extractor=self.pipe.feature_extractor,
+        #     safety_checker=None,
+        # )
+        self.img2img_pipe = LatentConsistencyModelImg2ImgPipeline.from_pretrained(
+            pretrained_model_name_or_path="SimianLuo/LCM_Dreamshaper_v7",
+            safety_checker=None,
+        ).to("cuda")
+
+
 
     def __call__(self,
                  prompt=None,
@@ -263,85 +299,115 @@ class ComfyDeforumGenerator:
                  **kwargs):
 
         SCHEDULER_NAMES = ["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform"]
+        if self.pipeline_type == "comfy":
+            if seed == -1:
+                seed = secrets.randbelow(18446744073709551615)
 
-        if seed == -1:
-            seed = secrets.randbelow(18446744073709551615)
+            print("I wanna use", strength)
 
-        print("I wanna use", strength)
+            if strength > 1:
+                strength = 1.0
+                init_image = None
+            if strength == 0.0:
+                strength = 1.0
+            if subseed == -1:
+                subseed = secrets.randbelow(18446744073709551615)
 
-        if strength > 1:
-            strength = 1.0
-            init_image = None
-        if strength == 0.0:
-            strength = 1.0
-        if subseed == -1:
-            subseed = secrets.randbelow(18446744073709551615)
+            if cnet_image is not None:
+                cnet_image = torch.from_numpy(np.array(cnet_image).astype(np.float32) / 255.0).unsqueeze(0)
 
-        if cnet_image is not None:
-            cnet_image = torch.from_numpy(np.array(cnet_image).astype(np.float32) / 255.0).unsqueeze(0)
+            if init_image is None:
+                if width == None:
+                    width = 1024
+                if height == None:
+                    height = 960
+                latent = self.generate_latent(width, height, seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w)
 
-        if init_image is None:
-            if width == None:
-                width = 1024
-            if height == None:
-                height = 960
-            latent = self.generate_latent(width, height, seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w)
+            else:
+                latent = torch.from_numpy(np.array(init_image).astype(np.float32) / 255.0).unsqueeze(0)
 
-        else:
-            latent = torch.from_numpy(np.array(init_image).astype(np.float32) / 255.0).unsqueeze(0)
-
-            latent = self.encode_latent(latent, subseed, subseed_strength)
-
-
-            #Implement Img2Img
-        if prompt is not None:
-            cond = self.get_conds(prompt)
-            n_cond = self.get_conds(negative_prompt)
-
-        if next_prompt is not None:
-            if next_prompt != prompt and next_prompt != "":
-                if 0.0 < prompt_blend < 1.0:
-                    next_cond = self.get_conds(next_prompt)
-                    cond = blend_tensors(cond[0], next_cond[0], blend_value=prompt_blend)
+                latent = self.encode_latent(latent, subseed, subseed_strength)
 
 
+                #Implement Img2Img
+            if prompt is not None:
+                cond = self.get_conds(prompt)
+                n_cond = self.get_conds(negative_prompt)
 
-        if cnet_image is not None:
-            cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
-
-
-        # from nodes import common_ksampler as ksampler
-
-        last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
-        last_step = steps if last_step == None else last_step
-        sample = common_ksampler_with_custom_noise(model=self.model,
-                                                   seed=seed,
-                                                   steps=steps,
-                                                   cfg=scale,
-                                                   sampler_name=sampler_name,
-                                                   scheduler=scheduler,
-                                                   positive=cond,
-                                                   negative=n_cond,
-                                                   latent=latent,
-                                                   denoise=strength,
-                                                   disable_noise=False,
-                                                   start_step=0,
-                                                   last_step=last_step,
-                                                   force_full_denoise=True,
-                                                   noise=self.rng)
+            if next_prompt is not None:
+                if next_prompt != prompt and next_prompt != "":
+                    if 0.0 < prompt_blend < 1.0:
+                        next_cond = self.get_conds(next_prompt)
+                        cond = blend_tensors(cond[0], next_cond[0], blend_value=prompt_blend)
 
 
 
-        decoded = self.decode_sample(sample[0]["samples"])
+            if cnet_image is not None:
+                cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
-        np_array = np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0]
-        image = Image.fromarray(np_array)
-        #image = Image.fromarray(np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0])
-        image = image.convert("RGB")
-        if return_latent:
-            return sample[0]["samples"], image
-        else:
+
+            # from nodes import common_ksampler as ksampler
+
+            last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
+            last_step = steps if last_step == None else last_step
+            sample = common_ksampler_with_custom_noise(model=self.model,
+                                                       seed=seed,
+                                                       steps=steps,
+                                                       cfg=scale,
+                                                       sampler_name=sampler_name,
+                                                       scheduler=scheduler,
+                                                       positive=cond,
+                                                       negative=n_cond,
+                                                       latent=latent,
+                                                       denoise=strength,
+                                                       disable_noise=False,
+                                                       start_step=0,
+                                                       last_step=last_step,
+                                                       force_full_denoise=True,
+                                                       noise=self.rng)
+
+
+
+            decoded = self.decode_sample(sample[0]["samples"])
+
+            np_array = np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0]
+            image = Image.fromarray(np_array)
+            #image = Image.fromarray(np.clip(255. * decoded.cpu().numpy(), 0, 255).astype(np.uint8)[0])
+            image = image.convert("RGB")
+            if return_latent:
+                return sample[0]["samples"], image
+            else:
+                return image
+        elif self.pipeline_type == "diffusers_lcm":
+            if init_image is None:
+                image = self.pipe(
+                        prompt=prompt,
+                        width=width,
+                        height=height,
+                        guidance_scale=scale,
+                        num_inference_steps=int(steps/5),
+                        num_images_per_prompt=1,
+                        lcm_origin_steps=50,
+                        output_type="pil",
+                    ).images[0]
+            else:
+                # init_image = np.array(init_image)
+                # init_image = Image.fromarray(init_image)
+                image = self.img2img_pipe(
+                        prompt=prompt,
+                        strength=strength,
+                        image=init_image,
+                        width=width,
+                        height=height,
+                        guidance_scale=scale,
+                        num_inference_steps=int(steps/5),
+                        num_images_per_prompt=1,
+                        lcm_origin_steps=50,
+                        output_type="pil",
+                    ).images[0]
+
             return image
+
 
     def decode_sample(self, sample):
         with torch.inference_mode():

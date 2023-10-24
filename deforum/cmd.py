@@ -442,7 +442,7 @@ def datacallback(data=None):
         image = data.get("image")
         cadence_frame = data.get("cadence_frame")
 
-    if image:
+    if image is not None:
         frames.append(image)
     elif cadence_frame:
         cadence_frames.append(cadence_frame)
@@ -652,6 +652,8 @@ def main():
     parser = argparse.ArgumentParser(description="Load settings from a txt file and run the deforum process.")
     parser.add_argument("--file", type=str, help="Path to the txt file containing dictionaries to merge.")
     parser.add_argument("--pipeline", type=str, default="deforum", help="Path to the txt file containing dictionaries to merge.")
+    parser.add_argument("--lcm", default=False, action="store_true", help="Path to the txt file containing dictionaries to merge.")
+
     parser.add_argument("--options", nargs=argparse.REMAINDER,
                         help="Additional keyword arguments to pass to the reforum function.")
     args_main = parser.parse_args()
@@ -740,7 +742,13 @@ def main():
 
         elif args_main.pipeline == "reforum":
             from deforum.pipelines.deforum_pipeline import DeforumAnimationPipeline
-            deforum = DeforumAnimationPipeline.from_civitai()
+            if args_main.lcm:
+                lcm = True
+            else:
+                lcm = False
+
+
+            deforum = DeforumAnimationPipeline.from_civitai(lcm=lcm)
             deforum.datacallback = datacallback
 
             extra_args = {}
