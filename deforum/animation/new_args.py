@@ -945,6 +945,12 @@ def DeforumArgs():
             "value": "internal",
             "info": ""
         },
+        "hybrid_use_full_video": {
+            "label": "Use full length of vide (auto compute max frames)",
+            "type": "checkbox",
+            "value": True,
+            "info": ""
+        },
     }
 
 def LoopArgs():
