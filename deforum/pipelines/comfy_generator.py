@@ -7,50 +7,52 @@ import numpy as np
 import torch
 from PIL import Image
 
+from deforum import default_cache_folder, fetch_and_download_model
 from deforum.cmd import root_path, comfy_path
 from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
 
-# 1. Check if the "src" directory exists
-if not os.path.exists(os.path.join(root_path, "src")):
-    os.makedirs(os.path.join(root_path, 'src'))
-# 2. Check if "ComfyUI" exists
-if not os.path.exists(comfy_path):
-    # Clone the repository if it doesn't exist
-    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-else:
-    # 3. If "ComfyUI" does exist, check its commit hash
-    current_folder = os.getcwd()
-    os.chdir(comfy_path)
-    current_commit = subprocess.getoutput("git rev-parse HEAD")
-
-    # 4. Reset to the desired commit if necessary
-    if current_commit != "4185324":  # replace with the full commit hash if needed
-        subprocess.run(["git", "fetch", "origin"])
-        subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
-        subprocess.run(["git", "pull", "origin", "master"])
-    os.chdir(current_folder)
+# # 1. Check if the "src" directory exists
+# if not os.path.exists(os.path.join(root_path, "src")):
+#     os.makedirs(os.path.join(root_path, 'src'))
+# # 2. Check if "ComfyUI" exists
+# if not os.path.exists(comfy_path):
+#     # Clone the repository if it doesn't exist
+#     subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
+# else:
+#     # 3. If "ComfyUI" does exist, check its commit hash
+#     current_folder = os.getcwd()
+#     os.chdir(comfy_path)
+#     current_commit = subprocess.getoutput("git rev-parse HEAD")
+#
+#     # 4. Reset to the desired commit if necessary
+#     if current_commit != "4185324":  # replace with the full commit hash if needed
+#         subprocess.run(["git", "fetch", "origin"])
+#         subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
+#         subprocess.run(["git", "pull", "origin", "master"])
+#     os.chdir(current_folder)
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
 
-from comfy.sample import sample as sample_k
-from comfy import model_management, controlnet
-from comfy.sd import load_checkpoint_guess_config
 
 
 class ComfyDeforumGenerator:
 
-    def __init__(self):
+    def __init__(self, model_path:str=None):
+        from comfy import model_management, controlnet
 
         model_management.vram_state = model_management.vram_state.HIGH_VRAM
         self.clip_skip = -2
         self.device = "cuda"
-        self.load_model()
+        if model_path == None:
+            models_dir = os.path.join(default_cache_folder)
+            fetch_and_download_model(125703, default_cache_folder)
+            model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
 
-        model_name = os.path.join(root_path, "models/controlnet/diffusers_xl_canny_mid.safetensors")
+        self.load_model(model_path)
 
-        self.controlnet = controlnet.load_controlnet(model_name)
+        # self.controlnet = controlnet.load_controlnet(model_name)
 
         self.rng = None
     def encode_latent(self, latent, subseed, subseed_strength):
@@ -66,6 +68,7 @@ class ComfyDeforumGenerator:
         if self.rng == None:
             self.rng = ImageRNG(shape=shape, seeds=[seed], subseeds=[subseed], subseed_strength=subseed_strength, seed_resize_from_h=seed_resize_from_h, seed_resize_from_w=seed_resize_from_w)
         noise = self.rng.next()
+        # noise = torch.zeros([1, 4, width // 8, height // 8])
         return {"samples":noise}
 
     def get_conds(self, prompt):
@@ -79,19 +82,19 @@ class ComfyDeforumGenerator:
             tokens = self.clip.tokenize(prompt)
             cond, pooled = self.clip.encode_from_tokens(tokens, return_pooled=True)
             return [[cond, {"pooled_output": pooled}]]
-    def load_model(self):
-        ckpt_path = os.path.join(root_path, "models/checkpoints/protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
-        self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(ckpt_path, output_vae=True,
+    def load_model(self, model_path:str):
+        from comfy.sd import load_checkpoint_guess_config
+        self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings")
-    def generate(self,
+    def __call__(self,
                  prompt=None,
                  next_prompt=None,
                  prompt_blend=None,
                  negative_prompt="",
                  steps=25,
                  scale=7.5,
-                 sampler_name="dpmpp_2m_sde_gpu",
+                 sampler_name="dpmpp_2m_sde",
                  scheduler="karras",
                  width=None,
                  height=None,
@@ -107,13 +110,17 @@ class ComfyDeforumGenerator:
                  latent=None,
                  last_step=None,
                  seed_resize_from_h=1024,
-                 seed_resize_from_w=1024):
+                 seed_resize_from_w=1024,
+                 *args,
+                 **kwargs):
 
         SCHEDULER_NAMES = ["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform"]
 
         if seed == -1:
             seed = secrets.randbelow(18446744073709551615)
-
+        if strength > 1:
+            strength = 1.0
+            init_image = None
 
         if subseed == -1:
             subseed = secrets.randbelow(18446744073709551615)
@@ -151,9 +158,9 @@ class ComfyDeforumGenerator:
             cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
 
-        #from nodes import common_ksampler as ksampler
+        from nodes import common_ksampler as ksampler
 
-        last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
+        #last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
         last_step = steps if last_step == None else last_step
         sample = common_ksampler_with_custom_noise(model=self.model,
                                                    seed=seed,
@@ -170,6 +177,7 @@ class ComfyDeforumGenerator:
                                                    last_step=last_step,
                                                    force_full_denoise=True,
                                                    noise=self.rng)
+
 
 
         decoded = self.decode_sample(sample[0]["samples"])
@@ -195,10 +203,16 @@ def common_ksampler_with_custom_noise(model, seed, steps, cfg, sampler_name, sch
                                       denoise=1.0, disable_noise=False, start_step=None, last_step=None,
                                       force_full_denoise=False, noise=None):
     latent_image = latent["samples"]
-
-    rng_noise = noise.next().detach().cpu()
-
-    noise = rng_noise.clone()
+    if noise is not None:
+        rng_noise = noise.next().detach().cpu()
+        noise = rng_noise.clone()
+    else:
+        if disable_noise:
+            noise = torch.zeros(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout, device="cpu")
+        else:
+            batch_inds = latent["batch_index"] if "batch_index" in latent else None
+            from comfy.sample import prepare_noise
+            noise = prepare_noise(latent_image, seed, batch_inds)
 
 
     noise_mask = None
@@ -208,6 +222,7 @@ def common_ksampler_with_custom_noise(model, seed, steps, cfg, sampler_name, sch
     # callback = latent_preview.prepare_callback(model, steps)
     # disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
 
+    from comfy.sample import sample as sample_k
 
     samples = sample_k(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image,
                                   denoise=denoise, disable_noise=disable_noise, start_step=start_step,

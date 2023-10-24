@@ -205,7 +205,6 @@ class Deforum:
         turbo_steps = 1 if using_vid_init else int(self.anim_args.diffusion_cadence)
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
-
         # initialize vars
         self.prev_img = None
         color_match_sample = None

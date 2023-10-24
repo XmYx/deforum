@@ -49,7 +49,7 @@ def DeforumAnimArgs():
             "label": "Max frames",
             "type": "number",
             "precision": 0,
-            "value": 120,
+            "value": 60,
             "info": "end the animation at this frame number",
         },
         "animtion_prompts_positive": {
@@ -98,7 +98,7 @@ def DeforumAnimArgs():
         "translation_z": {
             "label": "Translation Z",
             "type": "textbox",
-            "value": "0: (1.75)",
+            "value": "0: (5)",
             "info": "move canvas towards/away from view [speed set by FOV]"
         },
         "transform_center_x": {
@@ -170,7 +170,7 @@ def DeforumAnimArgs():
         "strength_schedule": {
             "label": "Strength schedule",
             "type": "textbox",
-            "value": "0: (0.65)",
+            "value": "0: (0.45)",
             "info": "amount of presence of previous frame to influence next frame, also controls steps in the following formula [steps - (strength_schedule * steps)]"
         },
         "contrast_schedule": {
@@ -183,7 +183,7 @@ def DeforumAnimArgs():
         "cfg_scale_schedule": {
             "label": "CFG scale schedule",
             "type": "textbox",
-            "value": "0: (7)",
+            "value": "0: (6)",
             "info": "how closely the image should conform to the prompt. Lower values produce more creative results. (recommended range 5-15)`"
         },
         "enable_steps_scheduling": {
@@ -744,15 +744,15 @@ def DeforumArgs():
             "minimum": 8,
             "maximum": 2048,
             "step": 8,
-            "value": 512,
+            "value": 1024,
         },
         "H": {
             "label": "Height",
             "type": "slider",
             "minimum": 64,
             "maximum": 2048,
-            "step": 64,
-            "value": 512,
+            "step": 8,
+            "value": 1024,
         },
         "tiling": {
             "label": "Tiling",
@@ -774,7 +774,7 @@ def DeforumArgs():
             "minimum": 0,
             "maximum": 2048,
             "step": 64,
-            "value": 0,
+            "value": 1024,
         },
         "seed_resize_from_h": {
             "label": "Resize seed from height",
@@ -782,7 +782,7 @@ def DeforumArgs():
             "minimum": 0,
             "maximum": 2048,
             "step": 64,
-            "value": 0,
+            "value": 1024,
         },
         "seed": {
             "label": "Seed",
@@ -837,7 +837,7 @@ def DeforumArgs():
             "minimum": 0,
             "maximum": 1,
             "step": 0.01,
-            "value": 0.8,
+            "value": 0.6,
         },
         "strength_0_no_init": {
             "label": "Strength 0 no init",

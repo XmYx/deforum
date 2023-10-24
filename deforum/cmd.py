@@ -38,67 +38,78 @@ from deforum.rng.rng import ImageRNG
 from deforum.storages import models as model_storage
 
 # img_gen = None
-# 1. Check if the "src" directory exists
-if not os.path.exists(os.path.join(root_path, "src")):
-    os.makedirs(os.path.join(root_path, 'src'))
-# 2. Check if "ComfyUI" exists
-if not os.path.exists(comfy_path):
-    # Clone the repository if it doesn't exist
-    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-else:
-    # 3. If "ComfyUI" does exist, check its commit hash
-    current_folder = os.getcwd()
-    os.chdir(comfy_path)
-    current_commit = subprocess.getoutput("git rev-parse HEAD")
-
-    # 4. Reset to the desired commit if necessary
-    if current_commit != "4185324":  # replace with the full commit hash if needed
-        subprocess.run(["git", "fetch", "origin"])
-        subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
-        subprocess.run(["git", "pull", "origin", "master"])
-    os.chdir(current_folder)
+# # 1. Check if the "src" directory exists
+# if not os.path.exists(os.path.join(root_path, "src")):
+#     os.makedirs(os.path.join(root_path, 'src'))
+# # 2. Check if "ComfyUI" exists
+# if not os.path.exists(comfy_path):
+#     # Clone the repository if it doesn't exist
+#     subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
+# else:
+#     # 3. If "ComfyUI" does exist, check its commit hash
+#     current_folder = os.getcwd()
+#     os.chdir(comfy_path)
+#     current_commit = subprocess.getoutput("git rev-parse HEAD")
+#
+#     # 4. Reset to the desired commit if necessary
+#     if current_commit != "4185324":  # replace with the full commit hash if needed
+#         subprocess.run(["git", "fetch", "origin"])
+#         subprocess.run(["git", "reset", "--hard", "4185324"])  # replace with the full commit hash if needed
+#         subprocess.run(["git", "pull", "origin", "master"])
+#     os.chdir(current_folder)
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
-def fetch_and_download_model(modelId, destination):
-    # Fetch model details
-    response = requests.get(f"https://civitai.com/api/v1/models/{modelId}")
-    response.raise_for_status()
-    model_data = response.json()
 
+def fetch_and_download_model(modelId, destination, max_retries=10):
+    for attempt in range(max_retries + 1):
+        try:
+            # Fetch model details
+            response = requests.get(f"https://civitai.com/api/v1/models/{modelId}")
+            response.raise_for_status()
+            model_data = response.json()
 
+            download_url = model_data['modelVersions'][0]['downloadUrl']
+            filename = model_data['modelVersions'][0]['files'][0]['name']
 
-    download_url = model_data['modelVersions'][0]['downloadUrl']
-    filename = model_data['modelVersions'][0]['files'][0]['name']
+            print(download_url)
+            print(filename)
 
-    print(download_url)
+            dir_path = destination
+            os.makedirs(dir_path, exist_ok=True)
+            filepath = os.path.join("models/checkpoints/", filename)
 
-    print(filename)
-    dir_path = destination
-    os.makedirs(dir_path, exist_ok=True)
-    filepath = os.path.join("models/checkpoints/", filename)
+            # Check if file already exists
+            if os.path.exists(filepath):
+                print(f"File {filename} already exists in models/checkpoints/")
+                return
 
-    # Check if file already exists
-    if os.path.exists(filepath):
-        print(f"File {filename} already exists in models/checkpoints/")
-        return
+            # Download file in chunks with progress bar
+            print(f"Downloading {filename}...")
+            response = requests.get(download_url, stream=True, headers={'Content-Disposition': 'attachment'})
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024  # 1 Kibibyte
+            t = tqdm(total=total_size, unit='iB', unit_scale=True)
+            with open(filepath, 'wb') as f:
+                for data in response.iter_content(block_size):
+                    t.update(len(data))
+                    f.write(data)
+            t.close()
 
-    # Download file in chunks with progress bar
-    print(f"Downloading {filename}...")
-    response = requests.get(download_url, stream=True, headers={'Content-Disposition': 'attachment'})
-    total_size = int(response.headers.get('content-length', 0))
-    block_size = 1024  # 1 Kibibyte
-    t = tqdm(total=total_size, unit='iB', unit_scale=True)
-    with open(filepath, 'wb') as f:
-        for data in response.iter_content(block_size):
-            t.update(len(data))
-            f.write(data)
-    t.close()
-
-    if total_size != 0 and t.n != total_size:
-        print("ERROR: Something went wrong while downloading the file.")
-    else:
-        print(f"{filename} downloaded successfully!")
+            if total_size != 0 and t.n != total_size:
+                print("ERROR: Something went wrong while downloading the file.")
+            else:
+                print(f"{filename} downloaded successfully!")
+            # If successful, break out of retry loop
+            return
+        except requests.RequestException as e:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt  # exponential backoff
+                print(f"Error encountered: {e}. Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                print("Max retries reached. Exiting...")
+                return
 
 class ComfyDeforumGenerator:
 
@@ -242,21 +253,7 @@ class ComfyDeforumGenerator:
                                                    last_step=last_step,
                                                    force_full_denoise=True,
                                                    noise=self.rng)
-        # sample = ksampler(model=self.model,
-        #                                            seed=seed,
-        #                                            steps=steps,
-        #                                            cfg=scale,
-        #                                            sampler_name=sampler_name,
-        #                                            scheduler=scheduler,
-        #                                            positive=cond,
-        #                                            negative=n_cond,
-        #                                            latent=latent,
-        #                                            denoise=strength,
-        #                                            disable_noise=False,
-        #                                            start_step=0,
-        #                                            last_step=last_step,
-        #                                            force_full_denoise=True,
-        #                                            )
+
 
 
         decoded = self.decode_sample(sample[0]["samples"])
@@ -457,13 +454,13 @@ def setup_deforum(img_gen=None):
     parseg_args = SimpleNamespace(**extract_values(ParseqArgs()))
     loop_args = SimpleNamespace(**extract_values(LoopArgs()))
     root = SimpleNamespace(**RootArgs())
-
     output_args_dict = {key: value["value"] for key, value in DeforumOutputArgs().items()}
-
     video_args = SimpleNamespace(**output_args_dict)
     controlnet_args = SimpleNamespace(**{})
+
     deforum = Deforum(args, anim_args, video_args, parseg_args, loop_args, controlnet_args, root)
     setattr(deforum.loop_args, "init_images", "")
+
     deforum.parseq_args.parseq_manifest = None
     animation_prompts = DeforumAnimPrompts()
     deforum.root.animation_prompts = json.loads(animation_prompts)
@@ -650,7 +647,7 @@ async def ws_datacallback(data=None):
 
 def main():
     process = None
-    model_storage.img_gen = ComfyDeforumGenerator()
+    #model_storage.img_gen = ComfyDeforumGenerator()
 
     parser = argparse.ArgumentParser(description="Load settings from a txt file and run the deforum process.")
     parser.add_argument("--file", type=str, help="Path to the txt file containing dictionaries to merge.")
@@ -736,9 +733,23 @@ def main():
             stcli.main(["run", f"{root_path}/deforum/streamlit_ui.py"])
         elif args_main.pipeline == "api":
             import uvicorn
-
-
             uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+        elif args_main.pipeline == "reforum":
+            from deforum.pipelines.deforum_pipeline import DeforumAnimationPipeline
+            deforum = DeforumAnimationPipeline.from_civitai()
+            deforum.datacallback = datacallback
+            animation = deforum()
+
+            dir_path = os.path.join(root_path, 'output/video')
+
+            os.makedirs(dir_path, exist_ok=True)
+
+            output_filename_base = os.path.join(dir_path, deforum.gen.timestring)
+            interpolator = Interpolator()
+            interpolated = interpolator(frames, 1)
+            save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
 
     except KeyboardInterrupt:
         if process:  # Check if there's a process reference
