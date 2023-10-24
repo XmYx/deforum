@@ -652,6 +652,8 @@ def main():
     parser = argparse.ArgumentParser(description="Load settings from a txt file and run the deforum process.")
     parser.add_argument("--file", type=str, help="Path to the txt file containing dictionaries to merge.")
     parser.add_argument("--pipeline", type=str, default="deforum", help="Path to the txt file containing dictionaries to merge.")
+    parser.add_argument("--options", nargs=argparse.REMAINDER,
+                        help="Additional keyword arguments to pass to the reforum function.")
     args_main = parser.parse_args()
 
 
@@ -746,7 +748,25 @@ def main():
             if args_main.file:
                 extra_args["settings_file"] = args_main.file
 
-            animation = deforum(store_frames_in_ram=True, **extra_args)
+            def convert_value(value):
+                """Converts the string value to its corresponding data type."""
+                if value.isdigit():
+                    return int(value)
+                try:
+                    return float(value)
+                except ValueError:
+                    if value.startswith('"') and value.endswith('"'):
+                        return value[1:-1]  # Remove the quotes and return the string
+                    else:
+                        return value
+
+            options = {}
+            if args_main.options:
+                for item in args_main.options:
+                    key, value_str = item.split('=')
+                    value = convert_value(value_str)
+                    options[key] = value
+            animation = deforum(store_frames_in_ram=True, **extra_args, **options)
 
             dir_path = os.path.join(root_path, 'output/video')
 

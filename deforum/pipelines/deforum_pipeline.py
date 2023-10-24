@@ -157,6 +157,7 @@ class DeforumGenerationObject:
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
         self.contrast = 1.0
+        self.hybrid_use_full_video = False
         self.turbo_steps = self.diffusion_cadence
         # Setting all kwargs as attributes
         for key, value in kwargs.items():
@@ -385,7 +386,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
             duration = (end_time - start_time) * 1000
             self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
 
-        while self.gen.frame_idx < self.gen.max_frames:
+        while self.gen.frame_idx  < self.gen.max_frames:
             # MAIN LOOP
             frame_start = time.time()
             for fn in self.shoot_fns:
@@ -397,7 +398,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
                 duration = (end_time - start_time) * 1000
                 self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
             duration = (time.time() - frame_start) * 1000
-            self.logger.log(f"----------------------------- Frame {self.gen.frame_idx} took {duration:.2f} ms")
+            self.logger.log(f"----------------------------- Frame {self.gen.frame_idx + 1} took {duration:.2f} ms")
 
         # POST LOOP
         for fn in self.post_fns:
@@ -416,10 +417,17 @@ class DeforumAnimationPipeline(DeforumPipeline):
         print("[ DEFORUM RENDER COMPLETE ]")
         return self.gen
     def pre_setup(self):
+        frame_warp_modes = ['2D', '3D']
+        hybrid_motion_modes = ['Affine', 'Perspective', 'Optical Flow']
 
+
+        if self.gen.animation_mode in frame_warp_modes:
+            # handle hybrid video generation
+            if self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in hybrid_motion_modes:
+                _, _, self.gen.inputfiles = hybrid_generation(self.gen, self.gen, self.gen)
         if int(self.gen.seed) == -1:
             self.gen.seed = secrets.randbelow(18446744073709551615)
-
+        self.gen.max_frames += 1
         self.gen.keys = DeformAnimKeys(self.gen, self.gen.seed)
         self.gen.loopSchedulesAndData = LooperAnimKeys(self.gen, self.gen, self.gen.seed)
         prompt_series = pd.Series([np.nan for a in range(self.gen.max_frames)])
@@ -430,6 +438,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
                 prompt_series[int(numexpr.evaluate(i))] = prompt
         prompt_series = prompt_series.ffill().bfill()
         self.gen.prompt_series = prompt_series
+        self.gen.max_frames -= 1
 
         # check for video inits
         self.gen.using_vid_init = self.gen.animation_mode == 'Video Input'
@@ -468,17 +477,10 @@ class DeforumAnimationPipeline(DeforumPipeline):
             print("[ Loading RAFT model ]")
             self.raft_model = RAFT()
 
-        frame_warp_modes = ['2D', '3D']
-        hybrid_motion_modes = ['Affine', 'Perspective', 'Optical Flow']
 
-        if self.gen.animation_mode in frame_warp_modes:
-            # handle hybrid video generation
-            if self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in hybrid_motion_modes:
-                _, _, self.gen.inputfiles = hybrid_generation(self.gen, self.gen, self.gen)
+
     def setup(self, *args, **kwargs) -> None:
-        # hybrid_composite = self.gen.get("hybrid_composite", ['None'])
-        # hybrid_motion = self.gen.get("hybrid_motion", ['None'])
-        # color_coherence = self.gen.get("color_coherence", ['None'])
+
         hybrid_available = self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in ['Optical Flow', 'Affine', 'Perspective']
 
         turbo_steps = self.gen.get('turbo_steps', 1)
@@ -750,7 +752,7 @@ class DeforumAnimationPipeline(DeforumPipeline):
                 "seed": self.gen.seed,
                 "scale": self.gen.scale,
                 # Comfy uses inverted strength compared to auto1111
-                "strength": 1 - self.genstrength,
+                "strength": self.genstrength,
                 "init_image": init_image,
                 "width": self.gen.W,
                 "height": self.gen.H,
@@ -1284,7 +1286,7 @@ def overlay_mask_cls(cls):
     return
 def post_gen_cls(cls):
 
-    if cls.gen.frame_idx + 1 <= cls.gen.max_frames:
+    if cls.gen.frame_idx < cls.gen.max_frames:
 
         cls.gen.opencv_image = cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR)
         cls.images.append(cls.gen.opencv_image.copy())
@@ -1318,11 +1320,12 @@ def post_gen_cls(cls):
                 #     lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
                 #     sd_hijack.model_hijack.hijack(sd_model)
             cls.gen.frame_idx += 1
-
         # state.assign_current_image(image)
         done = cls.datacallback({"image": cls.gen.image})
         #TODO IMPLEMENT CLS NEXT SEED
         cls.gen.seed = next_seed(cls.gen, cls.gen)
+
+
     return
 
 
@@ -1432,7 +1435,7 @@ def make_cadence_frames(cls):
                     cls.gen.turbo_next_image = image_transform_optical_flow(cls.gen.turbo_next_image, cadence_flow_inc,
                                                                     cls.gen.cadence_flow_factor)
 
-            turbo_prev_frame_idx = turbo_next_frame_idx = tween_frame_idx
+            cls.gen.turbo_prev_frame_idx = cls.gen.turbo_next_frame_idx = tween_frame_idx
 
             if cls.gen.turbo_prev_image is not None and tween < 1.0:
                 cls.gen.img = cls.gen.turbo_prev_image * (1.0 - tween) + cls.gen.turbo_next_image * tween

@@ -72,7 +72,8 @@ def hybrid_generation(args, anim_args, root):
 
     if not anim_args.hybrid_use_init_image:
         # determine max frames from length of input frames
-        anim_args.max_frames = len(inputfiles)
+        if args.hybrid_use_full_video:
+            anim_args.max_frames = len(inputfiles)
         if anim_args.max_frames < 1:
             raise Exception(
                 f"Error: No input frames found in {video_in_frame_path}! Please check your input video path and whether you've opted to extract input frames.")
