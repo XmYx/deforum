@@ -26,3 +26,5 @@ class ModelStorage(SingletonBorg):
     def get_value(self):
         return self.value
 
+
+models = {}

@@ -591,9 +591,10 @@ def generate_txt2img_comfy(prompt, next_prompt, blend_value, negative_prompt, ar
         gen_args["seed_resize_from_h"] = args.seed_resize_from_h
         gen_args["seed_resize_from_w"] = args.seed_resize_from_w
 
+    if "img_gen" not in model_storage.models:
+        model_storage.models["img_gen"] = ComfyDeforumGenerator()
 
-
-    image = model_storage.img_gen.generate(**gen_args)
+    image = model_storage.models["img_gen"].generate(**gen_args)
 
     torch.cuda.empty_cache()
 

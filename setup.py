@@ -7,19 +7,19 @@ os_name = platform.system().lower()
 
 torch_package_urls = {
     '3.10': {
-        'linux': 'torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl',
+        'linux': 'torch-2.1.0%2Bcu118-cp310-cp310-linux_x86_64.whl',
         'windows': 'torch-2.0.1%2Bcu118-cp310-cp310-win_amd64.whl'
     },
     '3.11': {
-        'linux': 'torch-2.0.1%2Bcu118-cp311-cp311-linux_x86_64.whl',
+        'linux': 'torch-2.1.0%2Bcu118-cp311-cp311-linux_x86_64.whl',
         'windows': 'torch-2.0.1%2Bcu118-cp311-cp311-win_amd64.whl'
     },
     '3.8': {
-        'linux': 'torch-2.0.1%2Bcu118-cp38-cp38-linux_x86_64.whl',
+        'linux': 'torch-2.1.0%2Bcu118-cp38-cp38-linux_x86_64.whl',
         'windows': 'torch-2.0.1%2Bcu118-cp38-cp38-win_amd64.whl'
     },
     '3.9': {
-        'linux': 'torch-2.0.1%2Bcu118-cp39-cp39-linux_x86_64.whl',
+        'linux': 'torch-2.1.0%2Bcu118-cp39-cp39-linux_x86_64.whl',
         'windows': 'torch-2.0.1%2Bcu118-cp39-cp39-win_amd64.whl'
     }
 }
@@ -77,7 +77,14 @@ setup(
         'timm==0.6.13',
         'diffusers',
         'transformers',
-        'python-ffmpeg'
+        'omegaconf==2.3.0',
+        'aiohttp==3.8.6',
+        'scipy==1.11.3',
+        'psutil==5.9.6',
+        'clip-interrogator==0.6.0',
+        'streamlit==1.27.2',
+        'torchsde>=0.2.5',
+        'fastapi>=0.100.0'
     ],
     entry_points={
         'console_scripts': [
