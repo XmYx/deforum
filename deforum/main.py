@@ -156,6 +156,10 @@ class Deforum:
         if use_parseq and keys.manages_prompts():
             prompt_series = keys.prompts
         else:
+
+            if isinstance(self.root.animation_prompts, str):
+                self.root.animation_prompts = json.loads(self.root.animation_prompts.replace("'", '"'))
+
             prompt_series = pd.Series([np.nan for a in range(self.anim_args.max_frames)])
             for i, prompt in self.root.animation_prompts.items():
                 if str(i).isdigit():

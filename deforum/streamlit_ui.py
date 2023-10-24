@@ -1,4 +1,5 @@
 import secrets
+import time
 
 import streamlit as st
 import os
@@ -8,18 +9,38 @@ import argparse
 from deforum.cmd import Interpolator, save_as_h264, reset_deforum, frames
 
 st.set_page_config(layout="wide")
+# if uploaded_file:
+#     uploaded_data = json.loads(uploaded_file.getvalue())
+def generate_ui(uploaded_data=None):
 
-def generate_ui():
+    defaults = {
+        "W": 768,
+        "H": 768,
+        "seed": -1,
+        "seed_behavior": "fixed",
+        "prompts": json.dumps({
+            "0": "Hyperrealistic art Dog . Extremely high-resolution details, photographic, realism pushed to extreme, fine texture, incredibly lifelike --neg simplified, abstract, unrealistic, impressionistic, low resolution"
+        }),
+        "animation_mode": "2D",
+        "max_frames": 25,
+        "border": "replicate",
+        "animation_prompts_negative": ""
+        #... (all other parameters with their default values)
+    }
+    if uploaded_data:
+        defaults.update(uploaded_data)
+    if defaults['seed'] > 9007199254740991:
+        defaults['seed'] = 9007199254740991
     with st.form(key="controls_form"):
         st.subheader("Basic Settings")
-        W = st.number_input("Width", value=768, min_value=1)
-        H = st.number_input("Height", value=768, min_value=1)
+        W = st.number_input("Width", value=defaults["W"], min_value=1)
+        H = st.number_input("Height", value=defaults["H"], min_value=1)
         # show_info_on_ui = st.checkbox("Show Info on UI", value=False)
         # tiling = st.checkbox("Tiling", value=False)
         # restore_faces = st.checkbox("Restore Faces", value=False)
         # seed_resize_from_w = st.number_input("Seed Resize From Width", value=768, min_value=1)
         # seed_resize_from_h = st.number_input("Seed Resize From Height", value=768, min_value=1)
-        seed = st.number_input("Seed", value=-1)
+        seed = st.number_input("Seed", value=defaults["seed"])
         # sampler = st.text_input("Sampler", value="DPM++ 2M SDE Karras")
         # steps = st.number_input("Steps", value=20, min_value=1)
         # batch_name = st.text_input("Batch Name", value="Bot-Preset-tests")
@@ -43,13 +64,11 @@ def generate_ui():
         # reroll_blank_frames = st.selectbox("Reroll Blank Frames", ["ignore", "reroll", "stop"])
         # reroll_patience = st.slider("Reroll Patience", value=10.0, min_value=0.0, max_value=100.0)
         # motion_preview_mode = st.checkbox("Motion Preview Mode", value=False)
-        prompts = st.text_area("Prompts", value=json.dumps({
-            "0":"Hyperrealistic art Dog . Extremely high-resolution details, photographic, realism pushed to extreme, fine texture, incredibly lifelike --neg simplified, abstract, unrealistic, impressionistic, low resolution"
-        }))
+        prompts = st.text_area("Prompts", value=str(defaults["prompts"]))
         # animation_prompts_positive = st.text_input("Animation Prompts Positive")
-        # animation_prompts_negative = st.text_input("Animation Prompts Negative")
+        animation_prompts_negative = st.text_input("Animation Prompts Negative")
         animation_mode = st.selectbox("Animation Mode", ["2D", "3D"])
-        max_frames = st.number_input("Max Frames", value=375, min_value=1)
+        max_frames = st.number_input("Max Frames", value=defaults["max_frames"], min_value=1)
         border = st.selectbox("Border", ["replicate", "reflect", "constant"])
         # ... [continue adding widgets for all other parameters]
 
@@ -86,9 +105,9 @@ def generate_ui():
             # "reroll_blank_frames": reroll_blank_frames,
             # "reroll_patience": reroll_patience,
             # "motion_preview_mode": motion_preview_mode,
-            "prompts": json.loads(prompts),
+            "animation_prompts": json.loads(prompts.replace("'", '"')),
             # "animation_prompts_positive": animation_prompts_positive,
-            # "animation_prompts_negative": animation_prompts_negative,
+            "animation_prompts_negative": animation_prompts_negative,
             "animation_mode": animation_mode,
             "max_frames": max_frames,
             "border": border,
@@ -114,17 +133,23 @@ def datacallback_streamlit(data=None):
 
 
 
-def main():
+def main_generation(params):
+    if "deforum_pipe" not in st.session_state:
+        print("LOADING DEFORUM INTO ST")
+        from deforum import DeforumAnimationPipeline
+
+        st.session_state["deforum_pipe"] = DeforumAnimationPipeline.from_civitai()
+        st.session_state.deforum_pipe.datacallback = datacallback_streamlit
+        time.sleep(0.5)
 
     frames.clear()
 
-    if st.session_state.deforum.args.seed == -1:
-        st.session_state.deforum.args.seed = secrets.randbelow(18446744073709551615)
-
-    print(st.session_state.deforum.anim_args.strength_schedule)
+    # if st.session_state.deforum_pipe.gen.seed == -1:
+    #     st.session_state.deforum_pipe.gen.seed = secrets.randbelow(18446744073709551615)
 
 
-    success = st.session_state.deforum()
+
+    success = st.session_state.deforum_pipe(**params)
 
     save_frames()
     # output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
@@ -161,7 +186,7 @@ def update_deforum(data):
 def save_frames():
     interpolator = Interpolator()
     interpolated = interpolator(frames, 1)
-    output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
+    output_filename_base = os.path.join(st.session_state.deforum_pipe.gen.timestring)
     save_as_h264(frames, output_filename_base + ".mp4", fps=15)
     save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
     # if len(st.session_state.cadence_frames) > 0:
@@ -172,10 +197,10 @@ def save_frames():
 if __name__ == "__main__":
 
 
-    if "deforum" not in st.session_state:
-        from deforum.cmd import setup_deforum
-        st.session_state.deforum = setup_deforum()
-        st.session_state.deforum.datacallback = datacallback_streamlit
+
+        # from deforum.cmd import setup_deforum
+        # st.session_state.deforum = setup_deforum()
+        # st.session_state.deforum.datacallback = datacallback_streamlit
 
     col1, col2 = st.columns([2,8])
     with col1:
@@ -183,27 +208,28 @@ if __name__ == "__main__":
         st.title("Deforum Animation Generator")
         st.write("### Upload Settings File")
         uploaded_file = st.file_uploader("Choose a settings txt file", type="txt")
-        params, submitted = generate_ui()
+        if uploaded_file:
+            uploaded_data = json.loads(uploaded_file.getvalue())
+        params, submitted = generate_ui(uploaded_data if uploaded_file else None)
     with col2:
 
         frame_placeholder = st.empty()
         #st.session_statecadence_frame_placeholder = st.empty()
         # frame_placeholder = st.empty()
         # cadence_frame_placeholder = st.empty()
-    if uploaded_file:
-        # Load settings from uploaded file
-        merged_data = json.loads(uploaded_file.getvalue())
+    # if uploaded_file:
+    #     # Load settings from uploaded file
+    #     merged_data = json.loads(uploaded_file.getvalue())
         # Update the SimpleNamespace objects
     if submitted:
         st.session_state.generation_started = True
         st.session_state.generation_complete = False
-        reset_deforum(st.session_state.deforum)
-        st.session_state.deforum.anim_args.seed_schedule = "0:(-1)"
+        #reset_deforum(st.session_state.deforum)
+        #st.session_state.deforum.anim_args.seed_schedule = "0:(-1)"
         # Call the main function to generate the animation
 
-        if uploaded_file:
-            update_deforum(merged_data)
-            main()
-        else:
-            update_deforum(params)
-            main()
+        merged_params = uploaded_data if uploaded_file else {}
+        merged_params.update(params)  # UI values take precedence
+        #update_deforum(merged_params)
+        main_generation(merged_params)
+
