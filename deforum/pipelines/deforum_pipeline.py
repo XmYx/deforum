@@ -43,11 +43,12 @@ from deforum.avfunctions.masks.composable_masks import compose_mask_with_check
 from deforum.avfunctions.masks.masks import do_overlay_mask
 from deforum.avfunctions.noise.noise import add_noise
 from deforum.avfunctions.video_audio_utilities import get_frame_name, get_next_frame
-from deforum.cmd import extract_values
+from deforum.cmd import extract_values, save_as_h264
 from deforum.datafunctions.prompt import prepare_prompt, check_is_number, split_weighted_subprompts
 from deforum.datafunctions.seed import next_seed
 from deforum.exttools.depth import DepthModel
 from deforum.general_utils import pairwise_repl
+from deforum.pipelines.interpolator import Interpolator
 
 root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 default_cache_folder = os.path.join(root_path, "models/checkpoints")
@@ -55,7 +56,9 @@ default_cache_folder = os.path.join(root_path, "models/checkpoints")
 script_start_time = time.time()
 
 from deforum.exttools import py3d_tools as p3d
-
+def calculate_frames_to_add(total_frames, interp_x):
+    frames_to_add = (total_frames * interp_x - total_frames) / (total_frames - 1)
+    return int(round(frames_to_add))
 class DeforumBase:
 
     @classmethod
@@ -144,7 +147,7 @@ class DeforumGenerationObject:
             self.seed = int(self.seed)
 
         self.prompts = None
-
+        self.frame_interpolation_engine = None
 
         # initialize vars
         self.prev_img = None
@@ -158,7 +161,7 @@ class DeforumGenerationObject:
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
         self.contrast = 1.0
-        self.hybrid_use_full_video = True
+        self.hybrid_use_full_video = False
         self.turbo_steps = self.diffusion_cadence
         # Setting all kwargs as attributes
         for key, value in kwargs.items():
@@ -536,6 +539,10 @@ class DeforumAnimationPipeline(DeforumPipeline):
             self.shoot_fns.append(overlay_mask_cls)
 
         self.shoot_fns.append(post_gen_cls)
+
+        if self.gen.frame_interpolation_engine == "FILM":
+            self.post_fns.append(film_interpolate_cls)
+
 
     def reset(self, *args, **kwargs) -> None:
         self.prep_fns = []
@@ -1479,3 +1486,23 @@ def color_match_video_input(cls):
         cls.gen.prev_vid_img = prev_vid_img.resize((cls.W, cls.H), PIL.Image.LANCZOS)
         color_match_sample = np.asarray(cls.gen.prev_vid_img)
         cls.gen.color_match_sample = cv2.cvtColor(color_match_sample, cv2.COLOR_RGB2BGR)
+
+
+def film_interpolate_cls(cls):
+    # "frame_interpolation_engine": "FILM",
+    # "frame_interpolation_x_amount": 2,
+    # "frame_interpolation_slow_mo_enabled": false,
+    # "frame_interpolation_slow_mo_amount": 2,
+    # "frame_interpolation_keep_imgs": false,
+    # "frame_interpolation_use_upscaled": false,
+    dir_path = os.path.join(root_path, 'output/video')
+    os.makedirs(dir_path, exist_ok=True)
+    output_filename_base = os.path.join(dir_path, cls.gen.timestring)
+    interpolator = Interpolator()
+
+    film_in_between_frames_count = calculate_frames_to_add(len(cls.images), cls.gen.frame_interpolation_x_amount)
+    print("Interpolating with", film_in_between_frames_count)
+    interpolated = interpolator(cls.images, film_in_between_frames_count)
+    save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
+
+

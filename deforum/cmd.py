@@ -774,16 +774,15 @@ def main():
                     key, value_str = item.split('=')
                     value = convert_value(value_str)
                     options[key] = value
-            animation = deforum(store_frames_in_ram=True, **extra_args, **options)
 
-            dir_path = os.path.join(root_path, 'output/video')
+            animation = deforum(store_frames_in_ram=False, **extra_args, **options)
 
-            os.makedirs(dir_path, exist_ok=True)
-
-            output_filename_base = os.path.join(dir_path, deforum.gen.timestring)
-            interpolator = Interpolator()
-            interpolated = interpolator(frames, 1)
-            save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
+            # dir_path = os.path.join(root_path, 'output/video')
+            # os.makedirs(dir_path, exist_ok=True)
+            # output_filename_base = os.path.join(dir_path, deforum.gen.timestring)
+            # interpolator = Interpolator()
+            # interpolated = interpolator(frames, 1)
+            # save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
 
     except KeyboardInterrupt:
         if process:  # Check if there's a process reference
