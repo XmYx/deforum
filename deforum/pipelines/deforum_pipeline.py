@@ -5,6 +5,7 @@ import math
 import os
 import random
 import secrets
+import textwrap
 import time
 from datetime import datetime
 from typing import Optional, Callable
@@ -31,7 +32,8 @@ from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, DeforumOutp
 from deforum.avfunctions.colors.colors import maintain_colors
 from deforum.avfunctions.hybridvideo.hybrid_video import autocontrast_grayscale, get_matrix_for_hybrid_motion_prev, \
     get_matrix_for_hybrid_motion, image_transform_ransac, get_flow_for_hybrid_motion_prev, get_flow_for_hybrid_motion, \
-    image_transform_optical_flow, get_flow_from_images, hybrid_composite, abs_flow_to_rel_flow, rel_flow_to_abs_flow
+    image_transform_optical_flow, get_flow_from_images, hybrid_composite, abs_flow_to_rel_flow, rel_flow_to_abs_flow, \
+    hybrid_generation
 from deforum.avfunctions.image.image_sharpening import unsharp_mask
 from deforum.avfunctions.image.load_images import load_image, get_mask_from_file, load_img, prepare_mask, \
     check_mask_for_errors
@@ -43,6 +45,7 @@ from deforum.avfunctions.noise.noise import add_noise
 from deforum.avfunctions.video_audio_utilities import get_frame_name, get_next_frame
 from deforum.cmd import extract_values
 from deforum.datafunctions.prompt import prepare_prompt, check_is_number, split_weighted_subprompts
+from deforum.datafunctions.seed import next_seed
 from deforum.exttools.depth import DepthModel
 from deforum.general_utils import pairwise_repl
 
@@ -139,6 +142,8 @@ class DeforumGenerationObject:
         else:
             self.seed = int(self.seed)
 
+        self.prompts = None
+
 
         # initialize vars
         self.prev_img = None
@@ -148,6 +153,7 @@ class DeforumGenerationObject:
         self.flow = None
         self.prev_flow = None
         self.image = None
+        self.store_frames_in_ram = None
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
         self.contrast = 1.0
@@ -163,6 +169,10 @@ class DeforumGenerationObject:
         """Returns all instance attributes as a dictionary."""
         return self.__dict__.copy()
 
+    def update_from_kwargs(self, *args, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
     @classmethod
     def from_settings_file(cls, settings_file_path: str = None):
         instance = cls()
@@ -176,7 +186,8 @@ class DeforumGenerationObject:
                     data = json.load(f)
             elif file_ext == '.txt':
                 with open(settings_file_path, 'r') as f:
-                    data = f.read()
+                    content = f.read()
+                    data = json.loads(content)
             else:
                 raise ValueError("Unsupported file type")
 
@@ -184,14 +195,14 @@ class DeforumGenerationObject:
             for key, value in data.items():
                 setattr(instance, key, value)
 
-
         if hasattr(instance, "diffusion_cadence"):
             instance.turbo_steps =  int(instance.diffusion_cadence)
 
         if hasattr(instance, "using_video_init"):
             if instance.using_video_init:
                 instance.turbo_steps = 1
-
+        if instance.prompts != None:
+            instance.animation_prompts = instance.prompts
         return instance
 
 
@@ -235,25 +246,49 @@ class Logger:
     def __init__(self, root_path: str):
         self.root_path = root_path
         self.log_file = None
+        self.current_datetime = datetime.now()
         self.timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.terminal_width = self.get_terminal_width()
+
+    def get_terminal_width(self):
+        """Get the width of the terminal."""
+        try:
+            import shutil
+            return shutil.get_terminal_size().columns
+        except (ImportError, AttributeError):
+            # Default width
+            return 80
 
     def start_session(self):
-        os.makedirs(os.path.join(self.root_path, 'logs'), exist_ok=True)
-        self.log_file = open(f"{self.root_path}/logs/metrics_{self.timestamp}.log", "a")
+        year, month, day = self.current_datetime.strftime('%Y'), self.current_datetime.strftime(
+            '%m'), self.current_datetime.strftime('%d')
+        log_path = os.path.join(self.root_path, 'logs', year, month, day)
+        os.makedirs(log_path, exist_ok=True)
+
+        self.log_file = open(os.path.join(log_path, f"metrics_{self.timestamp}.log"), "a")
+
+        self.log_file.write("=" * self.terminal_width + "\n")
+        self.log_file.write("Log Session Started: " + self.timestamp.center(self.terminal_width - 20) + "\n")
+        self.log_file.write("=" * self.terminal_width + "\n")
 
     def log(self, message: str, timestamped: bool = True):
         if timestamped:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            self.log_file.write(f"{timestamp} - {message}\n")
-        else:
-            self.log_file.write(f"{message}\n")
+            message = f"[{timestamp}] {message}"
+
+        # Wrap the message to the terminal width
+        wrapped_text = "\n".join(textwrap.wrap(message, width=self.terminal_width))
+
+        self.log_file.write(f"{wrapped_text}\n")
 
     def __call__(self, message: str, timestamped: bool = True, *args, **kwargs):
         self.log(message, timestamped)
 
-
     def close_session(self):
         if self.log_file:
+            self.log_file.write("\n" + "=" * self.terminal_width + "\n")
+            self.log_file.write("Log Session Ended".center(self.terminal_width) + "\n")
+            self.log_file.write("=" * self.terminal_width + "\n")
             self.log_file.close()
 
 class DeforumPipeline(DeforumBase):
@@ -302,13 +337,15 @@ class DeforumAnimationPipeline(DeforumPipeline):
         self.logger.log(f"Script startup / model loading took {duration:.2f} ms")
 
         if settings_file:
-            try:
-                self.gen = DeforumGenerationObject.from_settings_file(settings_file)
-            except Exception as e:
-                print(e)
-                self.gen = DeforumGenerationObject(**kwargs)
+            # try:
+            self.gen = DeforumGenerationObject.from_settings_file(settings_file)
+            # except Exception as e:
+            #     print(e)
+            #     self.gen = DeforumGenerationObject(**kwargs)
         else:
             self.gen = DeforumGenerationObject(**kwargs)
+
+        self.gen.update_from_kwargs(**kwargs)
 
         setup_start = time.time()
         self.pre_setup()
@@ -379,6 +416,10 @@ class DeforumAnimationPipeline(DeforumPipeline):
         print("[ DEFORUM RENDER COMPLETE ]")
         return self.gen
     def pre_setup(self):
+
+        if int(self.gen.seed) == -1:
+            self.gen.seed = secrets.randbelow(18446744073709551615)
+
         self.gen.keys = DeformAnimKeys(self.gen, self.gen.seed)
         self.gen.loopSchedulesAndData = LooperAnimKeys(self.gen, self.gen, self.gen.seed)
         prompt_series = pd.Series([np.nan for a in range(self.gen.max_frames)])
@@ -426,33 +467,41 @@ class DeforumAnimationPipeline(DeforumPipeline):
         if load_raft:
             print("[ Loading RAFT model ]")
             self.raft_model = RAFT()
+
+        frame_warp_modes = ['2D', '3D']
+        hybrid_motion_modes = ['Affine', 'Perspective', 'Optical Flow']
+
+        if self.gen.animation_mode in frame_warp_modes:
+            # handle hybrid video generation
+            if self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in hybrid_motion_modes:
+                _, _, self.gen.inputfiles = hybrid_generation(self.gen, self.gen, self.gen)
     def setup(self, *args, **kwargs) -> None:
-        hybrid_composite = self.gen.get("hybrid_composite", ['None'])
-        hybrid_motion = self.gen.get("hybrid_motion", ['None'])
-        color_coherence = self.gen.get("color_coherence", ['None'])
-        hybrid_available = hybrid_composite != 'None' or hybrid_motion in ['Optical Flow', 'Affine', 'Perspective']
+        # hybrid_composite = self.gen.get("hybrid_composite", ['None'])
+        # hybrid_motion = self.gen.get("hybrid_motion", ['None'])
+        # color_coherence = self.gen.get("color_coherence", ['None'])
+        hybrid_available = self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in ['Optical Flow', 'Affine', 'Perspective']
 
         turbo_steps = self.gen.get('turbo_steps', 1)
         if turbo_steps > 1:
             self.shoot_fns.append(make_cadence_frames)
-        if color_coherence == 'Video Input' and hybrid_available:
+        if self.gen.color_coherence == 'Video Input' and hybrid_available:
             self.shoot_fns.append(color_match_video_input)
         if self.gen.animation_mode in ['2D', '3D']:
             self.shoot_fns.append(anim_frame_warp_cls)
 
-        if hybrid_composite == 'Before Motion':
+        if self.gen.hybrid_composite == 'Before Motion':
             self.shoot_fns.append(hybrid_composite_cls)
 
-        if hybrid_motion in ['Affine', 'Perspective']:
+        if self.gen.hybrid_motion in ['Affine', 'Perspective']:
             self.shoot_fns.append(affine_persp_motion)
 
-        if hybrid_motion is ['Optical Flow']:
+        if self.gen.hybrid_motion is ['Optical Flow']:
             self.shoot_fns.append(optical_flow_motion)
 
-        if hybrid_composite == 'Normal':
+        if self.gen.hybrid_composite == 'Normal':
             self.shoot_fns.append(hybrid_composite_cls)
 
-        if color_coherence != 'None':
+        if self.gen.color_coherence != 'None':
             self.shoot_fns.append(color_match_cls)
 
         self.shoot_fns.append(set_contrast_image)
@@ -467,15 +516,15 @@ class DeforumAnimationPipeline(DeforumPipeline):
         if self.gen.optical_flow_redo_generation != 'None':
             self.shoot_fns.append(optical_flow_redo)
 
-        if self.gen.diffusion_redo > 0:
+        if int(self.gen.diffusion_redo) > 0:
             self.shoot_fns.append(diffusion_redo)
 
         self.shoot_fns.append(main_generate_with_cls)
 
-        if hybrid_composite == 'After Generation':
+        if self.gen.hybrid_composite == 'After Generation':
             self.shoot_fns.append(post_hybrid_composite_cls)
 
-        if color_coherence != 'None':
+        if self.gen.color_coherence != 'None':
             self.shoot_fns.append(post_color_match_with_cls)
 
         if self.gen.overlay_mask:
@@ -700,7 +749,8 @@ class DeforumAnimationPipeline(DeforumPipeline):
                 "steps": self.gen.steps,
                 "seed": self.gen.seed,
                 "scale": self.gen.scale,
-                "strength": self.genstrength,
+                # Comfy uses inverted strength compared to auto1111
+                "strength": 1 - self.genstrength,
                 "init_image": init_image,
                 "width": self.gen.W,
                 "height": self.gen.H,
@@ -880,77 +930,78 @@ def anim_frame_warp_3d_cls(cls, image):
 
 
 def hybrid_composite_cls(cls):
-    video_frame = os.path.join(cls.gen.outdir, 'inputframes',
-                               get_frame_name(cls.gen.video_init_path) + f"{cls.gen.frame_idx:09}.jpg")
-    video_depth_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                                     get_frame_name(cls.gen.video_init_path) + f"_vid_depth{cls.gen.frame_idx:09}.jpg")
-    depth_frame = os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx - 1:09}.png")
-    mask_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                              get_frame_name(cls.gen.video_init_path) + f"_mask{cls.gen.frame_idx:09}.jpg")
-    comp_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                              get_frame_name(cls.gen.video_init_path) + f"_comp{cls.gen.frame_idx:09}.jpg")
-    prev_frame = os.path.join(cls.gen.outdir, 'hybridframes',
-                              get_frame_name(cls.gen.video_init_path) + f"_prev{cls.gen.frame_idx:09}.jpg")
-    cls.gen.prev_img = cv2.cvtColor(cls.gen.prev_img, cv2.COLOR_BGR2RGB)
-    prev_img_hybrid = Image.fromarray(cls.gen.prev_img)
-    if cls.gen.hybrid_use_init_image:
-        video_image = load_image(cls.gen.init_image, cls.gen.init_image_box)
-    else:
-        video_image = Image.open(video_frame)
-    video_image = video_image.resize((cls.gen.W, cls.gen.H), PIL.Image.LANCZOS)
-    hybrid_mask = None
+    if cls.gen.prev_img is not None:
+        video_frame = os.path.join(cls.gen.outdir, 'inputframes',
+                                   get_frame_name(cls.gen.video_init_path) + f"{cls.gen.frame_idx:09}.jpg")
+        video_depth_frame = os.path.join(cls.gen.outdir, 'hybridframes',
+                                         get_frame_name(cls.gen.video_init_path) + f"_vid_depth{cls.gen.frame_idx:09}.jpg")
+        depth_frame = os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx - 1:09}.png")
+        mask_frame = os.path.join(cls.gen.outdir, 'hybridframes',
+                                  get_frame_name(cls.gen.video_init_path) + f"_mask{cls.gen.frame_idx:09}.jpg")
+        comp_frame = os.path.join(cls.gen.outdir, 'hybridframes',
+                                  get_frame_name(cls.gen.video_init_path) + f"_comp{cls.gen.frame_idx:09}.jpg")
+        prev_frame = os.path.join(cls.gen.outdir, 'hybridframes',
+                                  get_frame_name(cls.gen.video_init_path) + f"_prev{cls.gen.frame_idx:09}.jpg")
+        cls.gen.prev_img = cv2.cvtColor(cls.gen.prev_img, cv2.COLOR_BGR2RGB)
+        prev_img_hybrid = Image.fromarray(cls.gen.prev_img)
+        if cls.gen.hybrid_use_init_image:
+            video_image = load_image(cls.gen.init_image, cls.gen.init_image_box)
+        else:
+            video_image = Image.open(video_frame)
+        video_image = video_image.resize((cls.gen.W, cls.gen.H), PIL.Image.LANCZOS)
+        hybrid_mask = None
 
-    # composite mask types
-    if cls.gen.hybrid_comp_mask_type == 'Depth':  # get depth from last generation
-        hybrid_mask = Image.open(depth_frame)
-    elif cls.gen.hybrid_comp_mask_type == 'Video Depth':  # get video depth
-        video_depth = cls.depth_model.predict(np.array(video_image), cls.gen.midas_weight, cls.gen.half_precision)
-        cls.depth_model.save(video_depth_frame, video_depth)
-        hybrid_mask = Image.open(video_depth_frame)
-    elif cls.gen.hybrid_comp_mask_type == 'Blend':  # create blend mask image
-        hybrid_mask = Image.blend(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image),
-                                  cls.gen.hybrid_comp_schedules['mask_blend_alpha'])
-    elif cls.gen.hybrid_comp_mask_type == 'Difference':  # create difference mask image
-        hybrid_mask = ImageChops.difference(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image))
+        # composite mask types
+        if cls.gen.hybrid_comp_mask_type == 'Depth':  # get depth from last generation
+            hybrid_mask = Image.open(depth_frame)
+        elif cls.gen.hybrid_comp_mask_type == 'Video Depth':  # get video depth
+            video_depth = cls.depth_model.predict(np.array(video_image), cls.gen.midas_weight, cls.gen.half_precision)
+            cls.depth_model.save(video_depth_frame, video_depth)
+            hybrid_mask = Image.open(video_depth_frame)
+        elif cls.gen.hybrid_comp_mask_type == 'Blend':  # create blend mask image
+            hybrid_mask = Image.blend(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image),
+                                      cls.gen.hybrid_comp_schedules['mask_blend_alpha'])
+        elif cls.gen.hybrid_comp_mask_type == 'Difference':  # create difference mask image
+            hybrid_mask = ImageChops.difference(ImageOps.grayscale(prev_img_hybrid), ImageOps.grayscale(video_image))
 
-    # optionally invert mask, if mask type is defined
-    if cls.gen.hybrid_comp_mask_inverse and cls.gen.hybrid_comp_mask_type != "None":
-        hybrid_mask = ImageOps.invert(hybrid_mask)
+        # optionally invert mask, if mask type is defined
+        if cls.gen.hybrid_comp_mask_inverse and cls.gen.hybrid_comp_mask_type != "None":
+            hybrid_mask = ImageOps.invert(hybrid_mask)
 
-    # if a mask type is selected, make composition
-    if hybrid_mask is None:
-        hybrid_comp = video_image
-    else:
-        # ensure grayscale
-        hybrid_mask = ImageOps.grayscale(hybrid_mask)
-        # equalization before
-        if cls.gen.hybrid_comp_mask_equalize in ['Before', 'Both']:
-            hybrid_mask = ImageOps.equalize(hybrid_mask)
-            # contrast
-        hybrid_mask = ImageEnhance.Contrast(hybrid_mask).enhance(cls.gen.hybrid_comp_schedules['mask_contrast'])
-        # auto contrast with cutoffs lo/hi
-        if cls.gen.hybrid_comp_mask_auto_contrast:
-            hybrid_mask = autocontrast_grayscale(np.array(hybrid_mask),
-                                                 cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_low'],
-                                                 cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_high'])
-            hybrid_mask = Image.fromarray(hybrid_mask)
+        # if a mask type is selected, make composition
+        if hybrid_mask is None:
+            hybrid_comp = video_image
+        else:
+            # ensure grayscale
             hybrid_mask = ImageOps.grayscale(hybrid_mask)
-        if cls.gen.hybrid_comp_save_extra_frames:
-            hybrid_mask.save(mask_frame)
-            # equalization after
-        if cls.gen.hybrid_comp_mask_equalize in ['After', 'Both']:
-            hybrid_mask = ImageOps.equalize(hybrid_mask)
-            # do compositing and save
-        hybrid_comp = Image.composite(prev_img_hybrid, video_image, hybrid_mask)
-        if cls.gen.hybrid_comp_save_extra_frames:
-            hybrid_comp.save(comp_frame)
+            # equalization before
+            if cls.gen.hybrid_comp_mask_equalize in ['Before', 'Both']:
+                hybrid_mask = ImageOps.equalize(hybrid_mask)
+                # contrast
+            hybrid_mask = ImageEnhance.Contrast(hybrid_mask).enhance(cls.gen.hybrid_comp_schedules['mask_contrast'])
+            # auto contrast with cutoffs lo/hi
+            if cls.gen.hybrid_comp_mask_auto_contrast:
+                hybrid_mask = autocontrast_grayscale(np.array(hybrid_mask),
+                                                     cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_low'],
+                                                     cls.gen.hybrid_comp_schedules['mask_auto_contrast_cutoff_high'])
+                hybrid_mask = Image.fromarray(hybrid_mask)
+                hybrid_mask = ImageOps.grayscale(hybrid_mask)
+            if cls.gen.hybrid_comp_save_extra_frames:
+                hybrid_mask.save(mask_frame)
+                # equalization after
+            if cls.gen.hybrid_comp_mask_equalize in ['After', 'Both']:
+                hybrid_mask = ImageOps.equalize(hybrid_mask)
+                # do compositing and save
+            hybrid_comp = Image.composite(prev_img_hybrid, video_image, hybrid_mask)
+            if cls.gen.hybrid_comp_save_extra_frames:
+                hybrid_comp.save(comp_frame)
 
-    # final blend of composite with prev_img, or just a blend if no composite is selected
-    hybrid_blend = Image.blend(prev_img_hybrid, hybrid_comp, cls.gen.hybrid_comp_schedules['alpha'])
-    if cls.gen.hybrid_comp_save_extra_frames:
-        hybrid_blend.save(prev_frame)
+        # final blend of composite with prev_img, or just a blend if no composite is selected
+        hybrid_blend = Image.blend(prev_img_hybrid, hybrid_comp, cls.gen.hybrid_comp_schedules['alpha'])
+        if cls.gen.hybrid_comp_save_extra_frames:
+            hybrid_blend.save(prev_frame)
 
-    cls.gen.prev_img = cv2.cvtColor(np.array(hybrid_blend), cv2.COLOR_RGB2BGR)
+        cls.gen.prev_img = cv2.cvtColor(np.array(hybrid_blend), cv2.COLOR_RGB2BGR)
 
     # restore to np array and return
     return
@@ -1249,8 +1300,9 @@ def post_gen_cls(cls):
             filename = f"{cls.gen.timestring}_{cls.gen.frame_idx:09}.png"
 
             #TODO IMPLEMENT CLS SAVING
+            if not cls.gen.store_frames_in_ram:
 
-            save_image(cls.gen.image, 'PIL', filename, cls.gen, cls.gen, cls.gen)
+                save_image(cls.gen.image, 'PIL', filename, cls.gen, cls.gen, cls.gen)
 
             if cls.gen.save_depth_maps:
                 # if cmd_opts.lowvram or cmd_opts.medvram:
@@ -1270,7 +1322,7 @@ def post_gen_cls(cls):
         # state.assign_current_image(image)
         done = cls.datacallback({"image": cls.gen.image})
         #TODO IMPLEMENT CLS NEXT SEED
-        #cls.gen.seed = next_seed(args, root)
+        cls.gen.seed = next_seed(cls.gen, cls.gen)
     return
 
 
@@ -1403,8 +1455,9 @@ def make_cadence_frames(cls):
             # state.current_image = Image.fromarray(cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2RGB))
 
             # saving cadence frames
-            filename = f"{cls.gen.timestring}_{tween_frame_idx:09}.png"
-            cv2.imwrite(os.path.join(cls.gen.outdir, filename), cls.gen.img)
+            if not cls.gen.store_frames_in_ram:
+                filename = f"{cls.gen.timestring}_{tween_frame_idx:09}.png"
+                cv2.imwrite(os.path.join(cls.gen.outdir, filename), cls.gen.img)
             done = cls.datacallback({"cadence_frame": Image.fromarray(cls.gen.img)})
 
             if cls.gen.save_depth_maps:

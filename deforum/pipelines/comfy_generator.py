@@ -5,6 +5,7 @@ import subprocess
 
 import numpy as np
 import torch
+import torchsde
 from PIL import Image
 
 from deforum import default_cache_folder, fetch_and_download_model
@@ -13,30 +14,30 @@ from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
 
 # 1. Check if the "src" directory exists
-if not os.path.exists(os.path.join(root_path, "src")):
-    os.makedirs(os.path.join(root_path, 'src'))
-# 2. Check if "ComfyUI" exists
-if not os.path.exists(comfy_path):
-    # Clone the repository if it doesn't exist
-    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-else:
-    # 3. If "ComfyUI" does exist, check its commit hash
-    current_folder = os.getcwd()
-    os.chdir(comfy_path)
-    current_commit = subprocess.getoutput("git rev-parse HEAD")
-
-    # 4. Reset to the desired commit if necessary
-    if current_commit != "4185324":  # replace with the full commit hash if needed
-        subprocess.run(["git", "fetch", "origin"])
-        subprocess.run(["git", "reset", "--hard", "b935bea3a0201221eca7b0337bc60a329871300a"])  # replace with the full commit hash if needed
-        subprocess.run(["git", "pull", "origin", "master"])
-    os.chdir(current_folder)
+# if not os.path.exists(os.path.join(root_path, "src")):
+#     os.makedirs(os.path.join(root_path, 'src'))
+# # 2. Check if "ComfyUI" exists
+# if not os.path.exists(comfy_path):
+#     # Clone the repository if it doesn't exist
+#     subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
+# else:
+#     # 3. If "ComfyUI" does exist, check its commit hash
+#     current_folder = os.getcwd()
+#     os.chdir(comfy_path)
+#     current_commit = subprocess.getoutput("git rev-parse HEAD")
+#
+#     # 4. Reset to the desired commit if necessary
+#     if current_commit != "4185324":  # replace with the full commit hash if needed
+#         subprocess.run(["git", "fetch", "origin"])
+#         subprocess.run(["git", "reset", "--hard", "b935bea3a0201221eca7b0337bc60a329871300a"])  # replace with the full commit hash if needed
+#         subprocess.run(["git", "pull", "origin", "master"])
+#     os.chdir(current_folder)
 
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
 
 from collections import namedtuple
-from comfy.cli_args import LatentPreviewMethod as lp
+
 
 # Define the namedtuple structure based on the properties identified
 CLIArgs = namedtuple('CLIArgs', [
@@ -96,7 +97,7 @@ mock_args = CLIArgs(
     fp32_vae=False,
     force_fp32=False,
     force_fp16=False,
-    disable_smart_memory=True,
+    disable_smart_memory=False,
     disable_ipex_optimize=True,
     listen="127.0.0.1",
     port=8188,
@@ -119,7 +120,7 @@ mock_args = CLIArgs(
     windows_standalone_build=False,
     disable_metadata=False
 )
-
+from comfy.cli_args import LatentPreviewMethod as lp
 class MockCLIArgsModule:
     args = mock_args
     LatentPreviewMethod = lp
@@ -127,12 +128,62 @@ class MockCLIArgsModule:
 # Add the mock module to sys.modules under the name 'comfy.cli_args'
 sys.modules['comfy.cli_args'] = MockCLIArgsModule()
 
+import comfy.sd
+import comfy.diffusers_load
+
+class DeforumBatchedBrownianTree:
+    """A wrapper around torchsde.BrownianTree that enables batches of entropy."""
+
+    def __init__(self, x, t0, t1, seed=None, **kwargs):
+        self.cpu_tree = True
+        if "cpu" in kwargs:
+            self.cpu_tree = kwargs.pop("cpu")
+        t0, t1, self.sign = self.sort(t0, t1)
+        w0 = kwargs.get('w0', torch.zeros_like(x))
+        if seed is None:
+            seed = torch.randint(0, 2 ** 63 - 1, []).item()
+        self.batched = True
+        try:
+            assert len(seed) == x.shape[0]
+            w0 = w0[0]
+        except TypeError:
+            seed = [seed]
+            self.batched = False
+        if self.cpu_tree:
+            self.trees = [torchsde.BrownianTree(t0.cpu(), w0.cpu(), t1.cpu(), entropy=s, **kwargs) for s in seed]
+        else:
+            self.trees = [torchsde.BrownianTree(t0, w0, t1, entropy=s, **kwargs) for s in seed]
+
+    @staticmethod
+    def sort(a, b):
+        return (a, b, 1) if a < b else (b, a, -1)
+
+    def __call__(self, t0, t1):
+        t0, t1, sign = self.sort(t0, t1)
+        if torch.abs(t0 - t1) < 1e-6:  # or some other small value
+            # Handle this case, e.g., return a zero tensor of appropriate shape
+            return torch.zeros_like(t0)
+
+        if self.cpu_tree:
+            w = torch.stack(
+                [tree(t0.cpu().float(), t1.cpu().float()).to(t0.dtype).to(t0.device) for tree in self.trees]) * (
+                            self.sign * sign)
+        else:
+            w = torch.stack([tree(t0, t1) for tree in self.trees]) * (self.sign * sign)
+
+        return w if self.batched else w[0]
+
+
+import comfy.k_diffusion.sampling
+
+comfy.k_diffusion.sampling.BatchedBrownianTree = DeforumBatchedBrownianTree
+
 class ComfyDeforumGenerator:
 
     def __init__(self, model_path:str=None):
-        from comfy import model_management, controlnet
+        #from comfy import model_management, controlnet
 
-        model_management.vram_state = model_management.vram_state.HIGH_VRAM
+        #model_management.vram_state = model_management.vram_state.HIGH_VRAM
         self.clip_skip = -2
         self.device = "cuda"
         if model_path == None:
@@ -173,10 +224,17 @@ class ComfyDeforumGenerator:
             cond, pooled = self.clip.encode_from_tokens(tokens, return_pooled=True)
             return [[cond, {"pooled_output": pooled}]]
     def load_model(self, model_path:str):
-        from comfy.sd import load_checkpoint_guess_config
-        self.model, self.clip, self.vae, clipvision = load_checkpoint_guess_config(model_path, output_vae=True,
+
+
+        # comfy.sd.load_checkpoint_guess_config
+
+        self.model, self.clip, self.vae, clipvision = comfy.sd.load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings")
+        # model_path = os.path.join(root_path, "models/checkpoints/SSD-1B")
+        # self.model, self.clip, self.vae = comfy.diffusers_load.load_diffusers(model_path, output_vae=True, output_clip=True,
+        #                                     embedding_directory="models/embeddings")
+
     def __call__(self,
                  prompt=None,
                  next_prompt=None,
@@ -208,10 +266,14 @@ class ComfyDeforumGenerator:
 
         if seed == -1:
             seed = secrets.randbelow(18446744073709551615)
+
+        print("I wanna use", strength)
+
         if strength > 1:
             strength = 1.0
             init_image = None
-
+        if strength == 0.0:
+            strength = 1.0
         if subseed == -1:
             subseed = secrets.randbelow(18446744073709551615)
 
@@ -248,9 +310,9 @@ class ComfyDeforumGenerator:
             cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
 
-        from nodes import common_ksampler as ksampler
+        # from nodes import common_ksampler as ksampler
 
-        #last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
+        last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
         last_step = steps if last_step == None else last_step
         sample = common_ksampler_with_custom_noise(model=self.model,
                                                    seed=seed,

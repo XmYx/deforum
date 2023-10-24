@@ -740,7 +740,13 @@ def main():
             from deforum.pipelines.deforum_pipeline import DeforumAnimationPipeline
             deforum = DeforumAnimationPipeline.from_civitai()
             deforum.datacallback = datacallback
-            animation = deforum()
+
+            extra_args = {}
+
+            if args_main.file:
+                extra_args["settings_file"] = args_main.file
+
+            animation = deforum(store_frames_in_ram=True, **extra_args)
 
             dir_path = os.path.join(root_path, 'output/video')
 
