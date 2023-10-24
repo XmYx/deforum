@@ -59,11 +59,13 @@ class DeforumBase:
     def from_civitai(cls,
                      modelid:str=None,
                      generator:str="comfy",
-                     pipeline:str="deforum",
+                     pipeline:str="DeforumAnimationPipeline",
                      cache_dir:str=default_cache_folder):
 
-        # assert generator in available_engines, f"Make sure to use one of the available engines: {available_engines}"
-        # assert pipeline in available_pipelines, f"Make sure to use one of the available pipelines: {available_pipelines}"
+        from deforum import available_engines
+        assert generator in available_engines, f"Make sure to use one of the available engines: {available_engines}"
+        from deforum import available_pipelines
+        assert pipeline in available_pipelines, f"Make sure to use one of the available pipelines: {available_pipelines}"
 
         if not os.path.isdir(cache_dir):
             os.makedirs(cache_dir, exist_ok=True)
@@ -81,12 +83,17 @@ class DeforumBase:
         else:
             model_path = None
         from deforum import ComfyDeforumGenerator
+
         generator = ComfyDeforumGenerator(model_path=model_path)
 
-        # deforum_module = importlib.import_module(cls.__module__.split(".")[0])
-        # pipeline_class = getattr(deforum_module, pipeline)
+        deforum_module = importlib.import_module(cls.__module__.split(".")[0])
 
-        pipe = DeforumAnimationPipeline(generator)
+        print(cls.__name__)
+
+        #pipeline_class = getattr(deforum_module, pipeline)
+        pipeline_class = getattr(deforum_module, cls.__name__)
+
+        pipe = pipeline_class(generator)
 
         return pipe
 
