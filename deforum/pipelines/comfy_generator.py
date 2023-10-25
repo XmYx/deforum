@@ -14,24 +14,24 @@ from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
 
 # 1. Check if the "src" directory exists
-# if not os.path.exists(os.path.join(root_path, "src")):
-#     os.makedirs(os.path.join(root_path, 'src'))
-# # 2. Check if "ComfyUI" exists
-# if not os.path.exists(comfy_path):
-#     # Clone the repository if it doesn't exist
-#     subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-# else:
-#     # 3. If "ComfyUI" does exist, check its commit hash
-#     current_folder = os.getcwd()
-#     os.chdir(comfy_path)
-#     current_commit = subprocess.getoutput("git rev-parse HEAD")
-#
-#     # 4. Reset to the desired commit if necessary
-#     if current_commit != "4185324":  # replace with the full commit hash if needed
-#         subprocess.run(["git", "fetch", "origin"])
-#         subprocess.run(["git", "reset", "--hard", "b935bea3a0201221eca7b0337bc60a329871300a"])  # replace with the full commit hash if needed
-#         subprocess.run(["git", "pull", "origin", "master"])
-#     os.chdir(current_folder)
+if not os.path.exists(os.path.join(root_path, "src")):
+    os.makedirs(os.path.join(root_path, 'src'))
+# 2. Check if "ComfyUI" exists
+if not os.path.exists(comfy_path):
+    # Clone the repository if it doesn't exist
+    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
+else:
+    # 3. If "ComfyUI" does exist, check its commit hash
+    current_folder = os.getcwd()
+    os.chdir(comfy_path)
+    current_commit = subprocess.getoutput("git rev-parse HEAD")
+
+    # 4. Reset to the desired commit if necessary
+    if current_commit != "4185324":  # replace with the full commit hash if needed
+        subprocess.run(["git", "fetch", "origin"])
+        subprocess.run(["git", "reset", "--hard", "b935bea3a0201221eca7b0337bc60a329871300a"])  # replace with the full commit hash if needed
+        subprocess.run(["git", "pull", "origin", "master"])
+    os.chdir(current_folder)
 
 comfy_path = os.path.join(root_path, "src/ComfyUI")
 sys.path.append(comfy_path)
@@ -198,6 +198,7 @@ class ComfyDeforumGenerator:
                 models_dir = os.path.join(default_cache_folder)
                 fetch_and_download_model(125703, default_cache_folder)
                 model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
+                # model_path = os.path.join(models_dir, "SSD-1B.safetensors")
 
             self.load_model(model_path)
 
@@ -339,6 +340,10 @@ class ComfyDeforumGenerator:
             if self.prompt != prompt or self.cond == None:
                 if prompt is not None:
                     self.cond = self.get_conds(prompt)
+
+                    print(self.cond[0][0].shape)
+                    print(self.cond[0][1]["pooled_output"].shape)
+
                     self.n_cond = self.get_conds(negative_prompt)
                     self.prompt = prompt
             if next_prompt is not None:
