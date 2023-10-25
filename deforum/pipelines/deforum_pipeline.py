@@ -371,7 +371,7 @@ class Logger:
         log_path = os.path.join(self.root_path, 'logs', year, month, day)
         os.makedirs(log_path, exist_ok=True)
 
-        self.log_file = open(os.path.join(log_path, f"metrics_{self.timestamp.replace(' ', '_')}.log"), "a")
+        self.log_file = open(os.path.join(log_path, f"metrics_{self.timestamp.replace(' ', '_').replace(':', '_')}.log"), "a")
         self.log_file.write("=" * self.terminal_width + "\n")
         self.log_file.write("Log Session Started: " + self.timestamp.center(self.terminal_width - 20) + "\n")
         self.log_file.write("=" * self.terminal_width + "\n")
