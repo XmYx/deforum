@@ -671,9 +671,10 @@ def post_gen_cls(cls: Any) -> None:
         None: Modifies the class instance attributes in place.
     """
     if cls.gen.frame_idx < cls.gen.max_frames:
+        # cls.images.append(cls.gen.opencv_image.copy())
+        cls.images.append(np.array(cls.gen.image))
 
         cls.gen.opencv_image = cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR)
-        cls.images.append(cls.gen.opencv_image.copy())
 
         if not cls.gen.using_vid_init:
             cls.gen.prev_img = cls.gen.opencv_image

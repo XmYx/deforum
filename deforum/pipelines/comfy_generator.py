@@ -187,6 +187,12 @@ class ComfyDeforumGenerator:
         self.clip_skip = -2
         self.device = "cuda"
 
+        self.prompt = ""
+        self.n_prompt = ""
+
+        self.cond = None
+        self.n_cond = None
+
         if not lcm:
             if model_path == None:
                 models_dir = os.path.join(default_cache_folder)
@@ -330,20 +336,21 @@ class ComfyDeforumGenerator:
 
 
                 #Implement Img2Img
-            if prompt is not None:
-                cond = self.get_conds(prompt)
-                n_cond = self.get_conds(negative_prompt)
-
+            if self.prompt != prompt or self.cond == None:
+                if prompt is not None:
+                    self.cond = self.get_conds(prompt)
+                    self.n_cond = self.get_conds(negative_prompt)
+                    self.prompt = prompt
             if next_prompt is not None:
                 if next_prompt != prompt and next_prompt != "":
                     if 0.0 < prompt_blend < 1.0:
                         next_cond = self.get_conds(next_prompt)
-                        cond = blend_tensors(cond[0], next_cond[0], blend_value=prompt_blend)
+                        self.cond = blend_tensors(self.cond[0], next_cond[0], blend_value=prompt_blend)
 
 
 
             if cnet_image is not None:
-                cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
+                self.cond = apply_controlnet(cond, self.controlnet, cnet_image, 1.0)
 
 
             # from nodes import common_ksampler as ksampler
@@ -356,8 +363,8 @@ class ComfyDeforumGenerator:
                                                        cfg=scale,
                                                        sampler_name=sampler_name,
                                                        scheduler=scheduler,
-                                                       positive=cond,
-                                                       negative=n_cond,
+                                                       positive=self.cond,
+                                                       negative=self.n_cond,
                                                        latent=latent,
                                                        denoise=strength,
                                                        disable_noise=False,

@@ -9,6 +9,10 @@ import argparse
 from deforum.cmd import Interpolator, save_as_h264, reset_deforum, frames
 
 st.set_page_config(layout="wide")
+
+if "running" not in st.session_state:
+    st.session_state.running = False
+
 # if uploaded_file:
 #     uploaded_data = json.loads(uploaded_file.getvalue())
 def generate_ui(uploaded_data=None):
@@ -117,8 +121,6 @@ def generate_ui(uploaded_data=None):
     return params, submit_button
 
 def datacallback_streamlit(data=None):
-
-
     if data:
         image = data.get("image")
         cadence_frame = data.get("cadence_frame")
@@ -134,24 +136,27 @@ def datacallback_streamlit(data=None):
 
 
 def main_generation(params):
-    if "deforum_pipe" not in st.session_state:
-        print("LOADING DEFORUM INTO ST")
-        from deforum import DeforumAnimationPipeline
+    if not st.session_state.running:
+        st.session_state.running = True
+        # try:
+        if "deforum_pipe" not in st.session_state:
+            print("LOADING DEFORUM INTO ST")
+            from deforum import DeforumAnimationPipeline
 
-        st.session_state["deforum_pipe"] = DeforumAnimationPipeline.from_civitai()
-        st.session_state.deforum_pipe.datacallback = datacallback_streamlit
-        time.sleep(0.5)
+            st.session_state["deforum_pipe"] = DeforumAnimationPipeline.from_civitai()
+            st.session_state.deforum_pipe.datacallback = datacallback_streamlit
+            time.sleep(0.5)
 
-    frames.clear()
+        frames.clear()
 
-    # if st.session_state.deforum_pipe.gen.seed == -1:
-    #     st.session_state.deforum_pipe.gen.seed = secrets.randbelow(18446744073709551615)
+        success = st.session_state.deforum_pipe(**params)
 
+        save_frames()
+        # except:
+        #     pass
+        # finally:
+        #     st.session_state.running = False
 
-
-    success = st.session_state.deforum_pipe(**params)
-
-    save_frames()
     # output_filename_base = os.path.join(st.session_state.deforum.args.timestring)
     #
     # interpolator = Interpolator()
@@ -196,7 +201,7 @@ def save_frames():
 
 if __name__ == "__main__":
 
-
+    st.session_state.running = False
 
         # from deforum.cmd import setup_deforum
         # st.session_state.deforum = setup_deforum()

@@ -185,7 +185,7 @@ class DeforumGenerationObject:
         self.turbo_prev_image, self.turbo_prev_frame_idx = None, 0
         self.turbo_next_image, self.turbo_next_frame_idx = None, 0
         self.contrast = 1.0
-        self.hybrid_use_full_video = False
+        self.hybrid_use_full_video = True
         self.turbo_steps = self.diffusion_cadence
 
         # Set all provided keyword arguments as attributes
