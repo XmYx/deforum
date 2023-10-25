@@ -9,7 +9,7 @@ import torchsde
 from PIL import Image
 
 from deforum import default_cache_folder, fetch_and_download_model
-from deforum.cmd import root_path, comfy_path
+from deforum.shared import root_path, comfy_path
 from deforum.pipelines.cond_tools import blend_tensors
 from deforum.rng.rng import ImageRNG
 
@@ -163,7 +163,6 @@ class DeforumBatchedBrownianTree:
         if torch.abs(t0 - t1) < 1e-6:  # or some other small value
             # Handle this case, e.g., return a zero tensor of appropriate shape
             return torch.zeros_like(t0)
-
         if self.cpu_tree:
             w = torch.stack(
                 [tree(t0.cpu().float(), t1.cpu().float()).to(t0.dtype).to(t0.device) for tree in self.trees]) * (
@@ -196,7 +195,7 @@ class ComfyDeforumGenerator:
         if not lcm:
             if model_path == None:
                 models_dir = os.path.join(default_cache_folder)
-                fetch_and_download_model(125703, default_cache_folder)
+                fetch_and_download_model("125703", default_cache_folder)
                 model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
                 # model_path = os.path.join(models_dir, "SSD-1B.safetensors")
 
@@ -336,7 +335,6 @@ class ComfyDeforumGenerator:
                 latent = self.encode_latent(latent, subseed, subseed_strength)
 
 
-                #Implement Img2Img
             if self.prompt != prompt or self.cond == None:
                 if prompt is not None:
                     self.cond = self.get_conds(prompt)
@@ -346,6 +344,7 @@ class ComfyDeforumGenerator:
 
                     self.n_cond = self.get_conds(negative_prompt)
                     self.prompt = prompt
+
             if next_prompt is not None:
                 if next_prompt != prompt and next_prompt != "":
                     if 0.0 < prompt_blend < 1.0:
@@ -362,6 +361,7 @@ class ComfyDeforumGenerator:
 
             last_step = int((1-strength) * steps) + 1 if strength != 1.0 else steps
             last_step = steps if last_step == None else last_step
+
             sample = common_ksampler_with_custom_noise(model=self.model,
                                                        seed=seed,
                                                        steps=steps,

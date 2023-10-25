@@ -8,6 +8,9 @@ import numpy as np
 
 from .film_util import load_image
 
+from deforum.shared import root_path
+
+
 def poorman_wget(url, filename):
     ckpt_request = requests.get(url, stream=True)
     request_status = ckpt_request.status_code
@@ -35,9 +38,9 @@ class FilmModel():
 
     def __init__(self):
         super().__init__()
-
-        from deforum.cmd import root_path
-        self.model_path = os.path.join(root_path, "models/other/film_net_fp16.pt")
+        model_dir = os.path.join(root_path, "models/other")
+        os.makedirs(model_dir, exist_ok=True)
+        self.model_path = os.path.join(root_path, model_dir, "film_net_fp16.pt")
         url = 'https://github.com/dajes/frame-interpolation-pytorch/releases/download/v1.0.0/film_net_fp16.pt'
         if not os.path.isfile(self.model_path):
             poorman_wget(url, self.model_path)
