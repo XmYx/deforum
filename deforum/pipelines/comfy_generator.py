@@ -17,8 +17,10 @@ from deforum.rng.rng import ImageRNG
 class ComfyDeforumGenerator:
 
     def __init__(self, model_path:str=None, lcm=False, trt=False):
+
+        from deforum.datafunctions.ensure_comfy import ensure_comfy
+        ensure_comfy()
         from deforum.datafunctions import comfy_functions
-        comfy_functions.ensure_comfy()
         #from comfy import model_management, controlnet
 
         #model_management.vram_state = model_management.vram_state.HIGH_VRAM
