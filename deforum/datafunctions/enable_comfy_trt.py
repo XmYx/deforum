@@ -93,7 +93,7 @@ class TrtUnet(nn.Module):
         # if best["filepath"] == self.loaded_config["filepath"]:
         #     return
         self.deactivate()
-        self.engine = Engine(os.path.join(root_path, "models/unet.trt"))
+        self.engine = Engine(os.path.join(os.getcwd(), "models/unet.trt"))
         self.activate()
         self.loaded_config = "TRT"
 
