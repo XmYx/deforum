@@ -3,6 +3,7 @@ import gc
 import math
 import os
 import random
+from multiprocessing import Process
 from typing import Any, Union, Tuple, Optional
 
 import PIL
@@ -671,44 +672,51 @@ def post_gen_cls(cls: Any) -> None:
         None: Modifies the class instance attributes in place.
     """
     if cls.gen.frame_idx < cls.gen.max_frames:
-        # cls.images.append(cls.gen.opencv_image.copy())
+        #cls.logger(f"                                   [ ENTERING POST GEN CLS ]", True)
+
         cls.images.append(np.array(cls.gen.image))
+        #cls.logger(f"                                   [ frame added ]", True)
 
         cls.gen.opencv_image = cv2.cvtColor(np.array(cls.gen.image), cv2.COLOR_RGB2BGR)
+        #cls.logger(f"                                   [ cvtColor completed ]", True)
 
         if not cls.gen.using_vid_init:
             cls.gen.prev_img = cls.gen.opencv_image
+            #cls.logger(f"                                   [ updated prev_img ]", True)
 
         if cls.gen.turbo_steps > 1:
             cls.gen.turbo_prev_image, cls.gen.turbo_prev_frame_idx = cls.gen.turbo_next_image, cls.gen.turbo_next_frame_idx
             cls.gen.turbo_next_image, cls.gen.turbo_next_frame_idx = cls.gen.opencv_image, cls.gen.frame_idx
             cls.gen.frame_idx += cls.gen.turbo_steps
+            #cls.logger(f"                                   [ turbo_steps > 1 block executed ]", True)
         else:
             filename = f"{cls.gen.timestring}_{cls.gen.frame_idx:09}.png"
+            #cls.logger(f"                                   [ filename generated: {filename} ]", True)
 
-            #TODO IMPLEMENT CLS SAVING
             if not cls.gen.store_frames_in_ram:
+                p = Process(target=save_image, args=(cls.gen.image, 'PIL', filename, cls.gen, cls.gen, cls.gen))
+                p.start()
 
-                save_image(cls.gen.image, 'PIL', filename, cls.gen, cls.gen, cls.gen)
+                #cls.logger(f"                                   [ image saved ]", True)
 
             if cls.gen.save_depth_maps:
-                # if cmd_opts.lowvram or cmd_opts.medvram:
-                #     lowvram.send_everything_to_cpu()
-                #     sd_hijack.model_hijack.undo_hijack(sd_model)
-                #     devices.torch_gc()
-                #     depth_model.to(root.device)
-                cls.gen.depth = cls.depth_model.predict(cls.gen.opencv_image, cls.gen.midas_weight, cls.gen.half_precision)
-                cls.depth_model.save(os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx:09}.png"), cls.gen.depth)
-                # if cmd_opts.lowvram or cmd_opts.medvram:
-                #     depth_model.to('cpu')
-                #     devices.torch_gc()
-                #     lowvram.setup_for_low_vram(sd_model, cmd_opts.medvram)
-                #     sd_hijack.model_hijack.hijack(sd_model)
+                cls.gen.depth = cls.depth_model.predict(cls.gen.opencv_image, cls.gen.midas_weight,
+                                                        cls.gen.half_precision)
+                cls.depth_model.save(
+                    os.path.join(cls.gen.outdir, f"{cls.gen.timestring}_depth_{cls.gen.frame_idx:09}.png"),
+                    cls.gen.depth)
+                #cls.logger(f"                                   [ depth map saved ]", True)
+
             cls.gen.frame_idx += 1
-        # state.assign_current_image(image)
+            #cls.logger(f"                                   [ frame_idx incremented ]", True)
+
         done = cls.datacallback({"image": cls.gen.image})
-        #TODO IMPLEMENT CLS NEXT SEED
+        #cls.logger(f"                                   [ datacallback executed ]", True)
+
         cls.gen.seed = next_seed(cls.gen, cls.gen)
+        #cls.logger(f"                                   [ next seed generated ]", True)
+
+    #cls.logger(f"                                   [ EXITING POST GEN CLS ]", True)
     return
 
 

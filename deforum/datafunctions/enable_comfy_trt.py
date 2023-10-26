@@ -41,7 +41,7 @@ class TrtUnet(nn.Module):
 
         #self.loaded_config = self.configs[0]
         self.shape_hash = 0
-        self.engine = Engine(os.path.join(root_path, "models/Unet-trt/unet.trt"))
+        #self.engine = Engine(os.path.join(root_path, "models/Unet-trt/unet.trt"))
         self.dtype = torch.float16
         self.lora_path = None
 
@@ -99,7 +99,7 @@ class TrtUnet(nn.Module):
 
     def activate(self):
         self.engine.load()
-        print(self.engine)
+
         self.engine_vram_req = self.engine.engine.device_memory_size
         self.engine.activate(True)
 
@@ -108,7 +108,8 @@ class TrtUnet(nn.Module):
 
     def deactivate(self):
         self.shape_hash = 0
-        del self.engine
+        if hasattr(self, "engine"):
+            del self.engine
 
 
 # comfy.ldm.modules.diffusionmodules.openaimodel.UNetModel = TrtUnet

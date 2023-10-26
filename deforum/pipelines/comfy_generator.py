@@ -76,15 +76,20 @@ class ComfyDeforumGenerator:
             return [[cond, {"pooled_output": pooled}]]
     def load_model(self, model_path:str, trt:bool=False):
 
-
+        class DummyModel:
+            def __init__(self, model):
+                self.model = model
         # comfy.sd.load_checkpoint_guess_config
-
+        # model_path = root_path+"/models/checkpoints/SSD-1B.safetensors"
         self.model, self.clip, self.vae, clipvision = comfy.sd.load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
-                                                                             embedding_directory="models/embeddings")
+                                                                             embedding_directory="models/embeddings",
+                                                                             output_clipvision=False,
+                                                                             )
 
         if trt:
             from deforum.datafunctions.enable_comfy_trt import TrtUnet
+
             self.model.model.diffusion_model = TrtUnet()
 
     def load_lcm(self):
@@ -216,8 +221,6 @@ class ComfyDeforumGenerator:
                                                        last_step=last_step,
                                                        force_full_denoise=True,
                                                        noise=self.rng)
-
-
 
             decoded = self.decode_sample(sample[0]["samples"])
 

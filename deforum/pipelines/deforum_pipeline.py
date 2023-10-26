@@ -1,3 +1,4 @@
+import gc
 import importlib
 import json
 import math
@@ -194,6 +195,9 @@ class DeforumGenerationObject:
 
         # Set all provided keyword arguments as attributes
         for key, value in kwargs.items():
+            if key == 'animation_prompts':
+                print("SETTING GENERATION OBJECT", key, value)
+
             setattr(self, key, value)
 
     def get(self, attribute, default=None):
@@ -380,6 +384,11 @@ class Logger:
         self.log_file.write("Log Session Started: " + self.timestamp.center(self.terminal_width - 20) + "\n")
         self.log_file.write("=" * self.terminal_width + "\n")
 
+        self.start_time = time.time()
+
+
+
+
     def log(self, message: str, timestamped: bool = True):
         """
         Log a message to the log file.
@@ -388,9 +397,14 @@ class Logger:
             message (str): The message to be logged.
             timestamped (bool, optional): If True, add a timestamp prefix to the message. Default is True.
         """
+
+        time_now = time.time()
+        duration = (time_now - self.start_time) * 1000
+        self.start_time = time_now
         if timestamped:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            message = f"[{timestamp}] {message}"
+            message = f"[{timestamp} {duration:.2f} ms] {message}"
+
 
         # Wrap the message to the terminal width
         wrapped_text = "\n".join(textwrap.wrap(message, width=self.terminal_width))
@@ -625,6 +639,8 @@ class DeforumAnimationPipeline(DeforumBase):
         Certain functions are added to the list based on the conditions provided by the attributes of the `gen` object.
         Additionally, post-processing functions can be added to the `post_fns` list.
         """
+        self.reset()
+
         hybrid_available = self.gen.hybrid_composite != 'None' or self.gen.hybrid_motion in ['Optical Flow', 'Affine', 'Perspective']
 
         turbo_steps = self.gen.get('turbo_steps', 1)
@@ -683,9 +699,13 @@ class DeforumAnimationPipeline(DeforumBase):
 
 
     def reset(self, *args, **kwargs) -> None:
-        self.prep_fns = []
-        self.shoot_fns = []
-        self.post_fns = []
+        self.prep_fns.clear()
+        self.shoot_fns.clear()
+        self.post_fns.clear()
+        self.images.clear()
+        torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
+        gc.collect()
 
     def datacallback(self, data):
         pass
