@@ -28,7 +28,7 @@ def fetch_and_download_model(modelId:str, destination:str=default_cache_folder):
     # Check if file already exists
     if os.path.exists(filepath):
         print(f"File {filename} already exists in models/checkpoints/")
-        return
+        return filename
 
     # Download file in chunks with progress bar
     print(f"Downloading {filename}...")
