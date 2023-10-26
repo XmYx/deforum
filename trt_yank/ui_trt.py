@@ -191,6 +191,13 @@ def export_unet_to_trt(
 
 
 #model = load_a_unet_here (normal model object of ModelPatcher is fine)
+import comfy
+model, _, _, _ = comfy.sd.load_checkpoint_guess_config(root_path+"/models/checkpoints/SSD-1B.safetensors", output_vae=True,
+                                                                                    output_clip=True,
+                                                                                    embedding_directory="models/embeddings",
+                                                                                    output_clipvision=False,
+                                                                                    )
+
 
 export_unet_to_trt(model)
 

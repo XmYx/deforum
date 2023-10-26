@@ -72,7 +72,7 @@ setup(
         'py3d==0.0.87',
         'librosa==0.10.0.post2',
         'numpy==1.24.2',
-        'opencv-contrib-python==4.7.0.72',
+        'opencv-python-headless',
         'basicsr==1.4.2',
         'timm==0.6.13',
         'diffusers',
