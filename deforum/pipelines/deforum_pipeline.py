@@ -106,7 +106,7 @@ class DeforumBase:
         # Download model from CivitAi if specified
         if modelid is not None:
             from deforum import fetch_and_download_model
-            model_file_name = fetch_and_download_model(modelId=modelid)
+            model_file_name = fetch_and_download_model(modelId=modelid, destination=cache_dir)
             model_path = os.path.join(cache_dir, model_file_name)
         else:
             model_path = None
