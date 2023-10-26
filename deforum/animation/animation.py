@@ -315,9 +315,8 @@ def transform_image_3d_new(device, prev_img_cv2, depth_tensor, rot_mat, translat
 
     # test tensor for validity (some are corrupted for some reason)
     depth_tensor_invalid = depth_tensor is None or torch.isnan(depth_tensor).any() or torch.isinf(depth_tensor).any() or depth_tensor.min() == depth_tensor.max()
-    
-    if depth_tensor is not None:
-        debug_print(f"Depth_T.min: {depth_tensor.min()}, Depth_T.max: {depth_tensor.max()}")
+    # if depth_tensor is not None:
+    #     debug_print(f"Depth_T.min: {depth_tensor.min()}, Depth_T.max: {depth_tensor.max()}")
     # if invalid, create flat z for this frame
     if depth_tensor_invalid:
         # if none, then 3D depth is turned off, so no warning is needed.
@@ -341,8 +340,8 @@ def transform_image_3d_new(device, prev_img_cv2, depth_tensor, rot_mat, translat
         # will *only* print to console if Dev mode is enabled in general settings of Deforum
         txt_depth_min, txt_depth_max = '{:.2f}'.format(float(depth_tensor.min())), '{:.2f}'.format(float(depth_tensor.max()))
         diff = '{:.2f}'.format(float(depth_tensor.max()) - float(depth_tensor.min()))
-        console_txt = f"\033[36mDepth normalized to {depth_final.min()}/{depth_final.max()} from"
-        debug_print(f"{console_txt} {txt_depth_min}/{txt_depth_max} diff {diff}\033[0m") 
+        # console_txt = f"\033[36mDepth normalized to {depth_final.min()}/{depth_final.max()} from"
+        # debug_print(f"{console_txt} {txt_depth_min}/{txt_depth_max} diff {diff}\033[0m")
 
         # add z from depth
         z = torch.as_tensor(depth_final, dtype=torch.float32, device=device)

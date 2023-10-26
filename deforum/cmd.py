@@ -37,6 +37,8 @@ from deforum.rng.rng import ImageRNG
 
 from deforum.storages import models as model_storage
 
+model_storage.models = {}
+
 # img_gen = None
 # # 1. Check if the "src" directory exists
 # if not os.path.exists(os.path.join(root_path, "src")):
@@ -654,6 +656,7 @@ def main():
     parser.add_argument("--file", type=str, help="Path to the txt file containing dictionaries to merge.")
     parser.add_argument("--pipeline", type=str, default="deforum", help="Path to the txt file containing dictionaries to merge.")
     parser.add_argument("--lcm", default=False, action="store_true", help="Path to the txt file containing dictionaries to merge.")
+    parser.add_argument("--trt", default=False, action="store_true", help="Path to the txt file containing dictionaries to merge.")
 
     parser.add_argument("--options", nargs=argparse.REMAINDER,
                         help="Additional keyword arguments to pass to the reforum function.")
@@ -743,13 +746,23 @@ def main():
 
         elif args_main.pipeline == "reforum":
             from deforum.pipelines.deforum_pipeline import DeforumAnimationPipeline
+
+            import deforum.datafunctions.comfy_functions
+
             if args_main.lcm:
                 lcm = True
             else:
                 lcm = False
 
+            if args_main.trt:
+                import deforum.datafunctions.enable_comfy_trt
+                trt = True
+                lcm = False
+            else:
+                trt = False
 
-            deforum = DeforumAnimationPipeline.from_civitai(lcm=lcm)
+
+            deforum = DeforumAnimationPipeline.from_civitai(lcm=lcm, trt=trt)
             deforum.datacallback = datacallback
 
             extra_args = {}

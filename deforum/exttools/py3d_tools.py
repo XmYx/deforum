@@ -1645,7 +1645,7 @@ def _check_valid_rotation_matrix(R, tol: float = 1e-7) -> None:
         msg = "R is not a valid rotation matrix"
         warnings.warn(msg)
     return
-
+@torch.no_grad()
 def format_tensor(
     input,
     dtype: torch.dtype = torch.float32,
@@ -1664,7 +1664,7 @@ def format_tensor(
     if not torch.is_tensor(input):
         input = torch.tensor(input, dtype=dtype, device=device_)
     elif not input.device.type.startswith('mps'):
-        input = torch.tensor(input, dtype=torch.float32,device=device_)
+        input = input.to(dtype=torch.float32,device=device_)
 
     if input.dim() == 0:
         input = input.view(1)

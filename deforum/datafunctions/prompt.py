@@ -137,11 +137,11 @@ def prepare_prompt(prompt_series, max_frames, seed, frame_idx):
     prompt_to_print = prompt_to_print.strip()
     after_neg = "".join(after_neg).strip()
 
-    print(f"\033[32mSeed: \033[0m{seed}")
-    print(f"\033[35mPrompt: \033[0m{prompt_to_print}")
-    if after_neg and after_neg.strip():
-        print(f"\033[91mNeg Prompt: \033[0m{after_neg}")
-        prompt_to_print += f"--neg {after_neg}"
+    # print(f"\033[32mSeed: \033[0m{seed}")
+    # print(f"\033[35mPrompt: \033[0m{prompt_to_print}")
+    # if after_neg and after_neg.strip():
+    #     print(f"\033[91mNeg Prompt: \033[0m{after_neg}")
+    #     prompt_to_print += f"--neg {after_neg}"
 
     # set value back into the prompt
     return prompt_to_print

@@ -914,6 +914,7 @@ def film_interpolate_cls(cls: Any) -> None:
     print("Interpolating with", film_in_between_frames_count)
     interpolated = interpolator(cls.images, film_in_between_frames_count)
     save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
+    cls.gen.video_path = output_filename_base + "_FILM.mp4"
 
 def calculate_frames_to_add(total_frames: int, interp_x: float) -> int:
     """

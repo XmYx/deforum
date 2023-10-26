@@ -7,11 +7,10 @@ import json
 import argparse
 
 from deforum.cmd import Interpolator, save_as_h264, reset_deforum, frames
-
+from deforum.storages import models as gs
 st.set_page_config(layout="wide")
 
-if "running" not in st.session_state:
-    st.session_state.running = False
+
 
 # if uploaded_file:
 #     uploaded_data = json.loads(uploaded_file.getvalue())
@@ -139,19 +138,22 @@ def main_generation(params):
     if not st.session_state.running:
         st.session_state.running = True
         # try:
-        if "deforum_pipe" not in st.session_state:
+        if "deforum_pipe" not in gs.models:
             print("LOADING DEFORUM INTO ST")
             from deforum import DeforumAnimationPipeline
 
-            st.session_state["deforum_pipe"] = DeforumAnimationPipeline.from_civitai()
-            st.session_state.deforum_pipe.datacallback = datacallback_streamlit
+            gs.models["deforum_pipe"] = DeforumAnimationPipeline.from_civitai(trt=True)
+            gs.models["deforum_pipe"].datacallback = datacallback_streamlit
             time.sleep(0.5)
 
         frames.clear()
 
-        success = st.session_state.deforum_pipe(**params)
+        success = gs.models["deforum_pipe"](**params)
 
-        save_frames()
+        if hasattr(success, "video_path"):
+            frame_placeholder.video(success.video_path)
+
+        #save_frames()
         # except:
         #     pass
         # finally:
@@ -173,9 +175,9 @@ def update_deforum(data):
     print("Updating to file")
     for key, value in data.items():
 
-        if key == "prompts": st.session_state.deforum.root.animation_prompts = value
+        if key == "prompts": gs.models["deforum_pipe"].root.animation_prompts = value
 
-        st.session_state.deforum.animation_prompts = st.session_state.deforum.root.animation_prompts
+        gs.models["deforum_pipe"].animation_prompts = st.session_state.deforum.root.animation_prompts
 
         # print(st.session_state.deforum.root.animation_prompts)
         if hasattr(st.session_state.deforum.args, key):
@@ -191,7 +193,7 @@ def update_deforum(data):
 def save_frames():
     interpolator = Interpolator()
     interpolated = interpolator(frames, 1)
-    output_filename_base = os.path.join(st.session_state.deforum_pipe.gen.timestring)
+    output_filename_base = os.path.join(gs.models["deforum_pipe"].gen.timestring)
     save_as_h264(frames, output_filename_base + ".mp4", fps=15)
     save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
     # if len(st.session_state.cadence_frames) > 0:

@@ -14,10 +14,12 @@ import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
+from tqdm import tqdm
 
 from deforum.animation.animation_key_frames import DeformAnimKeys, LooperAnimKeys
 from deforum.animation.base_args import DeforumAnimPrompts
-from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, DeforumOutputArgs, RootArgs, ParseqArgs, LoopArgs
+from deforum.animation.new_args import DeforumArgs, DeforumAnimArgs, DeforumOutputArgs, RootArgs, ParseqArgs, LoopArgs, \
+    auto_to_comfy
 from deforum.avfunctions.hybridvideo.hybrid_video import hybrid_generation
 from deforum.avfunctions.image.load_images import load_img, prepare_mask, check_mask_for_errors
 from deforum.avfunctions.interpolation.RAFT import RAFT
@@ -69,7 +71,8 @@ class DeforumBase:
                      generator: str = "comfy",
                      pipeline: str = "DeforumAnimationPipeline",
                      cache_dir: str = default_cache_folder,
-                     lcm: bool = False) -> 'DeforumBase':
+                     lcm: bool = False,
+                     trt: bool = False) -> 'DeforumBase':
         """
         Class method to initialize a Deforum animation pipeline using specific configurations.
 
@@ -109,7 +112,7 @@ class DeforumBase:
 
         # Initialize the generator
         from deforum import ComfyDeforumGenerator
-        generator = ComfyDeforumGenerator(model_path=model_path, lcm=lcm)
+        generator = ComfyDeforumGenerator(model_path=model_path, lcm=lcm, trt=trt)
 
         # Import the relevant pipeline class
         deforum_module = importlib.import_module(cls.__module__.split(".")[0])
@@ -169,7 +172,8 @@ class DeforumGenerationObject:
         else:
             self.seed = int(self.seed)
 
-
+        self.scheduler = "normal"
+        self.sampler_name = "euler_a"
 
         # Further attribute initializations
         self.prompts = None
@@ -509,6 +513,8 @@ class DeforumAnimationPipeline(DeforumBase):
 
         self.logger.log(str(self.gen.to_dict()), timestamped=False)
 
+
+        self.pbar = tqdm(total=self.gen.max_frames, desc="Processing", position=0, leave=True)
         # PREP LOOP
         for fn in self.prep_fns:
             start_time = time.time()
@@ -517,7 +523,7 @@ class DeforumAnimationPipeline(DeforumBase):
             duration = (end_time - start_time) * 1000
             self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
 
-        while self.gen.frame_idx  < self.gen.max_frames:
+        while self.gen.frame_idx + 1 < self.gen.max_frames:
             # MAIN LOOP
             frame_start = time.time()
             for fn in self.shoot_fns:
@@ -528,8 +534,10 @@ class DeforumAnimationPipeline(DeforumBase):
                 end_time = time.time()
                 duration = (end_time - start_time) * 1000
                 self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
+            self.pbar.update(self.gen.turbo_steps)
             duration = (time.time() - frame_start) * 1000
             self.logger.log(f"----------------------------- Frame {self.gen.frame_idx + 1} took {duration:.2f} ms")
+        self.pbar.close()
 
         # POST LOOP
         for fn in self.post_fns:
@@ -537,7 +545,6 @@ class DeforumAnimationPipeline(DeforumBase):
             fn(self)
             duration = (time.time() - start_time) * 1000
             self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
-
         total_duration = (time.time() - start_total_time) * 1000
         average_time_per_frame = total_duration / self.gen.max_frames
 
@@ -551,6 +558,7 @@ class DeforumAnimationPipeline(DeforumBase):
         frame_warp_modes = ['2D', '3D']
         hybrid_motion_modes = ['Affine', 'Perspective', 'Optical Flow']
 
+        self.gen.max_frames += 1
 
         if self.gen.animation_mode in frame_warp_modes:
             # handle hybrid video generation
@@ -560,7 +568,6 @@ class DeforumAnimationPipeline(DeforumBase):
 
         if int(self.gen.seed) == -1:
             self.gen.seed = secrets.randbelow(18446744073709551615)
-        self.gen.max_frames += 1
         self.gen.keys = DeformAnimKeys(self.gen, self.gen.seed)
         self.gen.loopSchedulesAndData = LooperAnimKeys(self.gen, self.gen, self.gen.seed)
         prompt_series = pd.Series([np.nan for a in range(self.gen.max_frames)])
@@ -806,12 +813,13 @@ class DeforumAnimationPipeline(DeforumBase):
             'dpm++ 2m karras': 'DPM++ 2M Karras',
             'dpm++ sde karras': 'DPM++ SDE Karras'
         }
-        """if sampler_name is not None:
-            if sampler_name in available_samplers.keys():
-                p.sampler_name = available_samplers[sampler_name]
-            else:
-                raise RuntimeError(
-                    f"Sampler name '{sampler_name}' is invalid. Please check the available sampler list in the 'Run' tab")"""
+        if self.gen.scheduled_sampler_name is not None:
+            if self.gen.scheduled_sampler_name in auto_to_comfy.keys():
+                self.gen.sampler_name = auto_to_comfy[self.gen.sampler_name]["sampler"]
+                self.gen.scheduler = auto_to_comfy[self.gen.sampler_name]["scheduler"]
+            # else:
+            #     raise RuntimeError(
+            #         f"Sampler name '{sampler_name}' is invalid. Please check the available sampler list in the 'Run' tab")
 
         # if self.gen.checkpoint is not None:
         #    info = sd_models.get_closet_checkpoint_match(self.gen.checkpoint)
@@ -900,14 +908,15 @@ class DeforumAnimationPipeline(DeforumBase):
                 "steps": self.gen.steps,
                 "seed": self.gen.seed,
                 "scale": self.gen.scale,
-                # Comfy uses inverted strength compared to auto1111
                 "strength": self.genstrength,
                 "init_image": init_image,
                 "width": self.gen.W,
                 "height": self.gen.H,
                 "cnet_image": cnet_image,
                 "next_prompt": next_prompt,
-                "prompt_blend": blend_value
+                "prompt_blend": blend_value,
+                "scheduler":self.gen.scheduler,
+                "sampler_name":self.gen.sampler_name
             }
 
             # print(f"DEFORUM GEN ARGS: [{gen_args}] ")

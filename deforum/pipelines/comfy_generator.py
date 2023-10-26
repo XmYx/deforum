@@ -1,185 +1,22 @@
 
 import os, sys
 import secrets
-import subprocess
-
 import numpy as np
 import torch
-import torchsde
 from PIL import Image
 
+
 from deforum import default_cache_folder, fetch_and_download_model
-from deforum.shared import root_path, comfy_path
-from deforum.pipelines.cond_tools import blend_tensors
+from deforum.shared import root_path
 from deforum.rng.rng import ImageRNG
 
-# 1. Check if the "src" directory exists
-if not os.path.exists(os.path.join(root_path, "src")):
-    os.makedirs(os.path.join(root_path, 'src'))
-# 2. Check if "ComfyUI" exists
-if not os.path.exists(comfy_path):
-    # Clone the repository if it doesn't exist
-    subprocess.run(["git", "clone", "https://github.com/comfyanonymous/ComfyUI", comfy_path])
-else:
-    # 3. If "ComfyUI" does exist, check its commit hash
-    current_folder = os.getcwd()
-    os.chdir(comfy_path)
-    current_commit = subprocess.getoutput("git rev-parse HEAD")
-
-    # 4. Reset to the desired commit if necessary
-    if current_commit != "4185324":  # replace with the full commit hash if needed
-        subprocess.run(["git", "fetch", "origin"])
-        subprocess.run(["git", "reset", "--hard", "b935bea3a0201221eca7b0337bc60a329871300a"])  # replace with the full commit hash if needed
-        subprocess.run(["git", "pull", "origin", "master"])
-    os.chdir(current_folder)
-
-comfy_path = os.path.join(root_path, "src/ComfyUI")
-sys.path.append(comfy_path)
-
-from collections import namedtuple
-
-
-# Define the namedtuple structure based on the properties identified
-CLIArgs = namedtuple('CLIArgs', [
-    'cpu',
-    'normalvram',
-    'lowvram',
-    'novram',
-    'highvram',
-    'gpu_only',
-    'disable_xformers',
-    'use_pytorch_cross_attention',
-    'use_split_cross_attention',
-    'use_quad_cross_attention',
-    'fp16_vae',
-    'bf16_vae',
-    'fp32_vae',
-    'force_fp32',
-    'force_fp16',
-    'disable_smart_memory',
-    'disable_ipex_optimize',
-    'listen',
-    'port',
-    'enable_cors_header',
-    'extra_model_paths_config',
-    'output_directory',
-    'temp_directory',
-    'input_directory',
-    'auto_launch',
-    'disable_auto_launch',
-    'cuda_device',
-    'cuda_malloc',
-    'disable_cuda_malloc',
-    'dont_upcast_attention',
-    'bf16_unet',
-    'directml',
-    'preview_method',
-    'dont_print_server',
-    'quick_test_for_ci',
-    'windows_standalone_build',
-    'disable_metadata'
-])
-
-# Update the mock args object with default values for the new properties
-mock_args = CLIArgs(
-    cpu=False,
-    normalvram=False,
-    lowvram=False,
-    novram=False,
-    highvram=True,
-    gpu_only=True,
-    disable_xformers=True,
-    use_pytorch_cross_attention=True,
-    use_split_cross_attention=False,
-    use_quad_cross_attention=False,
-    fp16_vae=True,
-    bf16_vae=False,
-    fp32_vae=False,
-    force_fp32=False,
-    force_fp16=False,
-    disable_smart_memory=False,
-    disable_ipex_optimize=True,
-    listen="127.0.0.1",
-    port=8188,
-    enable_cors_header=None,
-    extra_model_paths_config=None,
-    output_directory=None,
-    temp_directory=None,
-    input_directory=None,
-    auto_launch=False,
-    disable_auto_launch=True,
-    cuda_device=0,
-    cuda_malloc=False,
-    disable_cuda_malloc=True,
-    dont_upcast_attention=True,
-    bf16_unet=True,
-    directml=None,
-    preview_method="none",
-    dont_print_server=True,
-    quick_test_for_ci=False,
-    windows_standalone_build=False,
-    disable_metadata=False
-)
-from comfy.cli_args import LatentPreviewMethod as lp
-class MockCLIArgsModule:
-    args = mock_args
-    LatentPreviewMethod = lp
-
-# Add the mock module to sys.modules under the name 'comfy.cli_args'
-sys.modules['comfy.cli_args'] = MockCLIArgsModule()
+from deforum.datafunctions import comfy_functions
 
 import comfy.sd
-import comfy.diffusers_load
-
-class DeforumBatchedBrownianTree:
-    """A wrapper around torchsde.BrownianTree that enables batches of entropy."""
-
-    def __init__(self, x, t0, t1, seed=None, **kwargs):
-        self.cpu_tree = True
-        if "cpu" in kwargs:
-            self.cpu_tree = kwargs.pop("cpu")
-        t0, t1, self.sign = self.sort(t0, t1)
-        w0 = kwargs.get('w0', torch.zeros_like(x))
-        if seed is None:
-            seed = torch.randint(0, 2 ** 63 - 1, []).item()
-        self.batched = True
-        try:
-            assert len(seed) == x.shape[0]
-            w0 = w0[0]
-        except TypeError:
-            seed = [seed]
-            self.batched = False
-        if self.cpu_tree:
-            self.trees = [torchsde.BrownianTree(t0.cpu(), w0.cpu(), t1.cpu(), entropy=s, **kwargs) for s in seed]
-        else:
-            self.trees = [torchsde.BrownianTree(t0, w0, t1, entropy=s, **kwargs) for s in seed]
-
-    @staticmethod
-    def sort(a, b):
-        return (a, b, 1) if a < b else (b, a, -1)
-
-    def __call__(self, t0, t1):
-        t0, t1, sign = self.sort(t0, t1)
-        if torch.abs(t0 - t1) < 1e-6:  # or some other small value
-            # Handle this case, e.g., return a zero tensor of appropriate shape
-            return torch.zeros_like(t0)
-        if self.cpu_tree:
-            w = torch.stack(
-                [tree(t0.cpu().float(), t1.cpu().float()).to(t0.dtype).to(t0.device) for tree in self.trees]) * (
-                            self.sign * sign)
-        else:
-            w = torch.stack([tree(t0, t1) for tree in self.trees]) * (self.sign * sign)
-
-        return w if self.batched else w[0]
-
-
-import comfy.k_diffusion.sampling
-
-comfy.k_diffusion.sampling.BatchedBrownianTree = DeforumBatchedBrownianTree
 
 class ComfyDeforumGenerator:
 
-    def __init__(self, model_path:str=None, lcm=False):
+    def __init__(self, model_path:str=None, lcm=False, trt=False):
         #from comfy import model_management, controlnet
 
         #model_management.vram_state = model_management.vram_state.HIGH_VRAM
@@ -199,14 +36,13 @@ class ComfyDeforumGenerator:
                 model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
                 # model_path = os.path.join(models_dir, "SSD-1B.safetensors")
 
-            self.load_model(model_path)
+            self.load_model(model_path, trt)
 
             self.pipeline_type = "comfy"
-
-        else:
+        if lcm:
             self.load_lcm()
-
             self.pipeline_type = "diffusers_lcm"
+
 
         # self.controlnet = controlnet.load_controlnet(model_name)
 
@@ -238,7 +74,7 @@ class ComfyDeforumGenerator:
             tokens = self.clip.tokenize(prompt)
             cond, pooled = self.clip.encode_from_tokens(tokens, return_pooled=True)
             return [[cond, {"pooled_output": pooled}]]
-    def load_model(self, model_path:str):
+    def load_model(self, model_path:str, trt:bool=False):
 
 
         # comfy.sd.load_checkpoint_guess_config
@@ -246,9 +82,11 @@ class ComfyDeforumGenerator:
         self.model, self.clip, self.vae, clipvision = comfy.sd.load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings")
-        # model_path = os.path.join(root_path, "models/checkpoints/SSD-1B")
-        # self.model, self.clip, self.vae = comfy.diffusers_load.load_diffusers(model_path, output_vae=True, output_clip=True,
-        #                                     embedding_directory="models/embeddings")
+
+        if trt:
+            from deforum.datafunctions.enable_comfy_trt import TrtUnet
+            self.model.model.diffusion_model = TrtUnet()
+
     def load_lcm(self):
         from deforum.lcm.lcm_pipeline import LatentConsistencyModelPipeline
 
@@ -276,9 +114,8 @@ class ComfyDeforumGenerator:
         ).to("cuda")
 
 
-
     def __call__(self,
-                 prompt=None,
+                 prompt="",
                  next_prompt=None,
                  prompt_blend=None,
                  negative_prompt="",
@@ -349,6 +186,8 @@ class ComfyDeforumGenerator:
                 if next_prompt != prompt and next_prompt != "":
                     if 0.0 < prompt_blend < 1.0:
                         next_cond = self.get_conds(next_prompt)
+                        from deforum.pipelines.cond_tools import blend_tensors
+
                         self.cond = blend_tensors(self.cond[0], next_cond[0], blend_value=prompt_blend)
 
 
@@ -421,6 +260,8 @@ class ComfyDeforumGenerator:
             return image
 
 
+
+
     def decode_sample(self, sample):
         with torch.inference_mode():
             sample = sample.to(torch.float32)
@@ -482,5 +323,96 @@ def apply_controlnet(conditioning, control_net, image, strength):
     return c
 
 
+def replace_forward_with(control_net_model, new_forward):
+    def forward_with_self(*args, **kwargs):
+        return new_forward(control_net_model, *args, **kwargs)
+    return forward_with_self
+
+def apply_model_for_trt(self, x, t, c_concat=None, c_crossattn=None, control=None, transformer_options={}, **kwargs):
+    if c_concat is not None:
+        xc = torch.cat([x] + [c_concat], dim=1)
+    else:
+        xc = x
+    context = c_crossattn
+    dtype = self.get_dtype()
+    xc = xc.to(dtype)
+    t = t.to(dtype)
+    context = context.to(dtype)
+    extra_conds = {}
+    for o in kwargs:
+        extra_conds[o] = kwargs[o].to(dtype)
+    return self.diffusion_model(xc, t, context=context, control=control, transformer_options=transformer_options,
+                                **extra_conds).float()
+
+
+def forward_for_trt(self, x, timesteps=None, context=None, y=None, control=None, transformer_options={}, **kwargs):
+    """
+    Apply the model to an input batch.
+    :param x: an [N x C x ...] Tensor of inputs.
+    :param timesteps: a 1-D batch of timesteps.
+    :param context: conditioning plugged in via crossattn
+    :param y: an [N] Tensor of labels, if class-conditional.
+    :return: an [N x C x ...] Tensor of outputs.
+    """
+
+    print("our forward")
+    transformer_options["original_shape"] = list(x.shape)
+    transformer_options["current_index"] = 0
+    transformer_patches = transformer_options.get("patches", {})
+
+    assert (y is not None) == (
+        self.num_classes is not None
+    ), "must specify y if and only if the model is class-conditional"
+    hs = []
+    from src.ComfyUI.comfy.ldm.modules.diffusionmodules.util import timestep_embedding
+    t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False).to(self.dtype)
+    emb = self.time_embed(t_emb)
+
+    if self.num_classes is not None:
+        assert y.shape[0] == x.shape[0]
+        emb = emb + self.label_emb(y)
+
+    h = x.type(self.dtype)
+    for id, module in enumerate(self.input_blocks):
+        transformer_options["block"] = ("input", id)
+        from src.ComfyUI.comfy.ldm.modules.diffusionmodules.openaimodel import forward_timestep_embed
+        h = forward_timestep_embed(module, h, emb, context, transformer_options)
+        if control is not None and 'input' in control and len(control['input']) > 0:
+            ctrl = control['input'].pop()
+            if ctrl is not None:
+                h += ctrl
+        hs.append(h)
+    transformer_options["block"] = ("middle", 0)
+    h = forward_timestep_embed(self.middle_block, h, emb, context, transformer_options)
+    if control is not None and 'middle' in control and len(control['middle']) > 0:
+        ctrl = control['middle'].pop()
+        if ctrl is not None:
+            h += ctrl
+
+    for id, module in enumerate(self.output_blocks):
+        transformer_options["block"] = ("output", id)
+        hsp = hs.pop()
+        if control is not None and 'output' in control and len(control['output']) > 0:
+            ctrl = control['output'].pop()
+            if ctrl is not None:
+                hsp += ctrl
+
+        if "output_block_patch" in transformer_patches:
+            patch = transformer_patches["output_block_patch"]
+            for p in patch:
+                h, hsp = p(h, hsp, transformer_options)
+
+        h = torch.cat([h, hsp], dim=1)
+        del hsp
+        if len(hs) > 0:
+            output_shape = hs[-1].shape
+        else:
+            output_shape = None
+        h = forward_timestep_embed(module, h, emb, context, transformer_options, output_shape)
+    h = h.type(x.dtype)
+    if self.predict_codebook_ids:
+        return self.id_predictor(h)
+    else:
+        return self.out(h)
 
 
