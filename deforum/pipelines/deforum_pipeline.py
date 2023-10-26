@@ -111,7 +111,7 @@ class DeforumBase:
             model_path = os.path.join(cache_dir, model_file_name)
         else:
             model_path = None
-
+        print("MODEL PATH BEFORE COMFY", model_path)
         # Initialize the generator
         from deforum import ComfyDeforumGenerator
         generator = ComfyDeforumGenerator(model_path=model_path, lcm=lcm, trt=trt)
