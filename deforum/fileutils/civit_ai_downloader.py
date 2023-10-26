@@ -19,8 +19,11 @@ def fetch_and_download_model(modelId:str, destination:str=default_cache_folder):
 
     print(filename)
     dir_path = destination
+    print(dir_path)
+
     os.makedirs(dir_path, exist_ok=True)
     filepath = os.path.join(dir_path, filename)
+    print(filepath)
 
     # Check if file already exists
     if os.path.exists(filepath):
