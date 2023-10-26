@@ -191,3 +191,10 @@ config/settings.yaml
 config/cache.json
 
 docs/venv_test/
+
+dataset_dl/
+cog_make/
+pytorch_model/
+nvidia_trt/onnx
+nvidia_trt/engine
+models/

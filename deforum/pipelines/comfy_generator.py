@@ -10,13 +10,15 @@ from deforum import default_cache_folder, fetch_and_download_model
 from deforum.shared import root_path
 from deforum.rng.rng import ImageRNG
 
-from deforum.datafunctions import comfy_functions
 
-import comfy.sd
+
+#import comfy.sd
 
 class ComfyDeforumGenerator:
 
     def __init__(self, model_path:str=None, lcm=False, trt=False):
+        from deforum.datafunctions import comfy_functions
+        comfy_functions.ensure_comfy()
         #from comfy import model_management, controlnet
 
         #model_management.vram_state = model_management.vram_state.HIGH_VRAM
@@ -81,6 +83,7 @@ class ComfyDeforumGenerator:
                 self.model = model
         # comfy.sd.load_checkpoint_guess_config
         # model_path = root_path+"/models/checkpoints/SSD-1B.safetensors"
+        import comfy.sd
         self.model, self.clip, self.vae, clipvision = comfy.sd.load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
                                                                              embedding_directory="models/embeddings",
@@ -151,8 +154,6 @@ class ComfyDeforumGenerator:
             if seed == -1:
                 seed = secrets.randbelow(18446744073709551615)
 
-            print("I wanna use", strength)
-
             if strength > 1:
                 strength = 1.0
                 init_image = None
@@ -181,8 +182,8 @@ class ComfyDeforumGenerator:
                 if prompt is not None:
                     self.cond = self.get_conds(prompt)
 
-                    print(self.cond[0][0].shape)
-                    print(self.cond[0][1]["pooled_output"].shape)
+                    # print(self.cond[0][0].shape)
+                    # print(self.cond[0][1]["pooled_output"].shape)
 
                     self.n_cond = self.get_conds(negative_prompt)
                     self.prompt = prompt
@@ -358,7 +359,7 @@ def forward_for_trt(self, x, timesteps=None, context=None, y=None, control=None,
     :return: an [N x C x ...] Tensor of outputs.
     """
 
-    print("our forward")
+    # print("our forward")
     transformer_options["original_shape"] = list(x.shape)
     transformer_options["current_index"] = 0
     transformer_patches = transformer_options.get("patches", {})
