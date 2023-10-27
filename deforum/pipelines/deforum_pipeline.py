@@ -586,6 +586,11 @@ class DeforumAnimationPipeline(DeforumBase):
         self.gen.keys = DeformAnimKeys(self.gen, self.gen.seed)
         self.gen.loopSchedulesAndData = LooperAnimKeys(self.gen, self.gen, self.gen.seed)
         prompt_series = pd.Series([np.nan for a in range(self.gen.max_frames)])
+
+        if self.gen.prompts is not None:
+            if isinstance(self.gen.prompts, dict):
+                self.gen.animation_prompts = self.gen.prompts
+
         for i, prompt in self.gen.animation_prompts.items():
             if str(i).isdigit():
                 prompt_series[int(i)] = prompt
