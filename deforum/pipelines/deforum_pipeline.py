@@ -472,7 +472,7 @@ class DeforumAnimationPipeline(DeforumBase):
         self.post_fns = []
         self.images = []
 
-    def __call__(self, settings_file: str = None, *args, **kwargs) -> DeforumGenerationObject:
+    def __call__(self, settings_file: str = None, callback=None, *args, **kwargs) -> DeforumGenerationObject:
         """
         Execute the animation pipeline.
 
@@ -484,6 +484,11 @@ class DeforumAnimationPipeline(DeforumBase):
         Returns:
             DeforumGenerationObject: The generated object after the pipeline execution.
         """
+
+        if callback is not None:
+            print("Callback was passed to __call__")
+            self.datacallback = callback
+
         self.logger.start_session()
 
         start_total_time = time.time()
