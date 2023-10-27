@@ -913,15 +913,21 @@ def film_interpolate_cls(cls: Any) -> None:
     # "frame_interpolation_slow_mo_amount": 2,
     # "frame_interpolation_keep_imgs": false,
     # "frame_interpolation_use_upscaled": false,
-    dir_path = os.path.join(root_path, 'output/video')
-    os.makedirs(dir_path, exist_ok=True)
-    output_filename_base = os.path.join(dir_path, cls.gen.timestring)
+
     interpolator = Interpolator()
 
     film_in_between_frames_count = calculate_frames_to_add(len(cls.images), cls.gen.frame_interpolation_x_amount)
     print("Interpolating with", film_in_between_frames_count)
     interpolated = interpolator(cls.images, film_in_between_frames_count)
-    save_as_h264(interpolated, output_filename_base + "_FILM.mp4", fps=30)
+    cls.images = interpolated
+    return
+
+
+def save_video_cls(cls):
+    dir_path = os.path.join(root_path, 'output/video')
+    os.makedirs(dir_path, exist_ok=True)
+    output_filename_base = os.path.join(dir_path, cls.gen.timestring)
+    save_as_h264(cls.images, output_filename_base + "_FILM.mp4", fps=30)
     cls.gen.video_path = output_filename_base + "_FILM.mp4"
 
 def calculate_frames_to_add(total_frames: int, interp_x: float) -> int:

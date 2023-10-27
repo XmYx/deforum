@@ -30,24 +30,24 @@ from deforum.exttools.depth import DepthModel
 from deforum.general_utils import pairwise_repl
 
 from deforum.pipelines.animation_elements import (anim_frame_warp_cls,
-                                                 hybrid_composite_cls,
-                                                 affine_persp_motion,
-                                                 optical_flow_motion,
-                                                 color_match_cls,
-                                                 set_contrast_image,
-                                                 handle_noise_mask,
-                                                 add_noise_cls,
-                                                 get_generation_params,
-                                                 optical_flow_redo,
-                                                 main_generate_with_cls,
-                                                 post_hybrid_composite_cls,
-                                                 post_gen_cls,
-                                                 post_color_match_with_cls,
-                                                 film_interpolate_cls,
-                                                 overlay_mask_cls,
-                                                 make_cadence_frames,
-                                                 color_match_video_input,
-                                                 diffusion_redo)
+                                                  hybrid_composite_cls,
+                                                  affine_persp_motion,
+                                                  optical_flow_motion,
+                                                  color_match_cls,
+                                                  set_contrast_image,
+                                                  handle_noise_mask,
+                                                  add_noise_cls,
+                                                  get_generation_params,
+                                                  optical_flow_redo,
+                                                  main_generate_with_cls,
+                                                  post_hybrid_composite_cls,
+                                                  post_gen_cls,
+                                                  post_color_match_with_cls,
+                                                  film_interpolate_cls,
+                                                  overlay_mask_cls,
+                                                  make_cadence_frames,
+                                                  color_match_video_input,
+                                                  diffusion_redo, save_video_cls)
 
 
 #root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -702,6 +702,8 @@ class DeforumAnimationPipeline(DeforumBase):
 
         if self.gen.frame_interpolation_engine == "FILM":
             self.post_fns.append(film_interpolate_cls)
+
+        self.post_fns.append(save_video_cls)
 
 
     def reset(self, *args, **kwargs) -> None:
