@@ -91,10 +91,6 @@ class ComfyDeforumGenerator:
                                                                              embedding_directory="models/embeddings",
                                                                              output_clipvision=False,
                                                                              )
-
-        lora_path = "/home/mix/Downloads/D4ll34_001-step00022000.safetensors"
-        lora = comfy.utils.load_torch_file(lora_path, safe_load=False)
-        self.model, self.clip = comfy.sd.load_lora_for_models(self.model, self.clip, lora, 1.0, 1.0)
         if trt:
             from deforum.datafunctions.enable_comfy_trt import TrtUnet
             self.model.model.diffusion_model = TrtUnet()
