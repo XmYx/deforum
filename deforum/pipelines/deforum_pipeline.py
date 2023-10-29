@@ -496,13 +496,15 @@ class DeforumAnimationPipeline(DeforumBase):
         duration = (start_total_time - script_start_time) * 1000
         self.logger.log(f"Script startup / model loading took {duration:.2f} ms")
 
+        self.gen = None
+
         if settings_file:
             self.gen = DeforumGenerationObject.from_settings_file(settings_file)
         else:
             self.gen = DeforumGenerationObject(**kwargs)
 
         self.gen.update_from_kwargs(**kwargs)
-
+        print("RIGHT AFTER INSTANTIATING", self.gen.W, self.gen.H)
         setup_start = time.time()
         self.pre_setup()
         setup_end = time.time()
@@ -542,8 +544,8 @@ class DeforumAnimationPipeline(DeforumBase):
             end_time = time.time()
             duration = (end_time - start_time) * 1000
             self.logger.log(f"{fn.__name__} took {duration:.2f} ms")
-
-        while self.gen.frame_idx + 1 < self.gen.max_frames:
+        print(self.gen.frame_idx, self.gen.max_frames)
+        while self.gen.frame_idx + 1 <= self.gen.max_frames:
             # MAIN LOOP
             frame_start = time.time()
             for fn in self.shoot_fns:
@@ -578,7 +580,7 @@ class DeforumAnimationPipeline(DeforumBase):
         frame_warp_modes = ['2D', '3D']
         hybrid_motion_modes = ['Affine', 'Perspective', 'Optical Flow']
 
-        self.gen.max_frames += 1
+        #self.gen.max_frames += 1
 
         if self.gen.animation_mode in frame_warp_modes:
             # handle hybrid video generation
@@ -603,7 +605,7 @@ class DeforumAnimationPipeline(DeforumBase):
                 prompt_series[int(numexpr.evaluate(i))] = prompt
         prompt_series = prompt_series.ffill().bfill()
         self.gen.prompt_series = prompt_series
-        self.gen.max_frames -= 1
+        #self.gen.max_frames -= 1
 
         # check for video inits
         self.gen.using_vid_init = self.gen.animation_mode == 'Video Input'
@@ -641,6 +643,7 @@ class DeforumAnimationPipeline(DeforumBase):
         if load_raft:
             print("[ Loading RAFT model ]")
             self.raft_model = RAFT()
+        print(self.gen.W, self.gen.H)
 
     def setup(self, *args, **kwargs) -> None:
         """
@@ -704,11 +707,11 @@ class DeforumAnimationPipeline(DeforumBase):
             self.shoot_fns.append(overlay_mask_cls)
 
         self.shoot_fns.append(post_gen_cls)
-
-        if self.gen.frame_interpolation_engine == "FILM":
-            self.post_fns.append(film_interpolate_cls)
-
-        self.post_fns.append(save_video_cls)
+        if self.gen.max_frames > 3:
+            if self.gen.frame_interpolation_engine == "FILM":
+                self.post_fns.append(film_interpolate_cls)
+        if self.gen.max_frames > 1:
+            self.post_fns.append(save_video_cls)
 
 
     def reset(self, *args, **kwargs) -> None:
@@ -951,6 +954,8 @@ class DeforumAnimationPipeline(DeforumBase):
                 "scheduler":self.gen.scheduler,
                 "sampler_name":self.gen.sampler_name
             }
+            if self.gen.frame_idx == 0:
+                gen_args["reset_noise"] = True
 
             # print(f"DEFORUM GEN ARGS: [{gen_args}] ")
 
@@ -959,7 +964,7 @@ class DeforumAnimationPipeline(DeforumBase):
                 gen_args["subseed_strength"] = self.gen.subseed_strength
                 gen_args["seed_resize_from_h"] = self.gen.seed_resize_from_h
                 gen_args["seed_resize_from_w"] = self.gen.seed_resize_from_w
-
+            print("GEN ARGS FROM PIPELINE", gen_args)
             processed = self.generator(**gen_args)
 
             torch.cuda.empty_cache()

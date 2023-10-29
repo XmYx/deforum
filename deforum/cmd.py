@@ -395,6 +395,11 @@ def save_as_h264(frames, filename, audio_path=None, fps=12):
     import time
 
     if len(frames) > 0:
+        if not isinstance(frames[0], Image.Image):
+            frames = [Image.fromarray(frame) for frame in frames]
+
+
+    if len(frames) > 0:
         width = frames[0].size[0]
         height = frames[0].size[1]
 

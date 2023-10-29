@@ -8,7 +8,7 @@ import torchsde
 # from torch import nn
 # from torch.cuda import nvtx
 
-from deforum.shared import root_path
+from deforum import root_path
 # from trt_yank.model_manager import modelmanager
 # from trt_yank.utilities import Engine
 comfy_path = os.path.join(root_path, "src/ComfyUI")

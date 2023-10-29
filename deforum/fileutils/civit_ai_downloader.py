@@ -32,7 +32,7 @@ def fetch_and_download_model(modelId:str, destination:str=default_cache_folder):
 
     # Download file in chunks with progress bar
     print(f"Downloading {filename}...")
-    response = requests.get(download_url, stream=True, headers={'Content-Disposition': 'attachment'})
+    response = requests.get(f'{download_url}?token=a44763d416db87cfb4fdb6b70369f4a3', stream=True, headers={'Content-Disposition': 'attachment'})
     total_size = int(response.headers.get('content-length', 0))
     block_size = 1024  # 1 Kibibyte
     t = tqdm(total=total_size, unit='iB', unit_scale=True)

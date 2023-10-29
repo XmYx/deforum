@@ -7,7 +7,7 @@ from PIL import Image
 
 
 from deforum import default_cache_folder, fetch_and_download_model
-from deforum.shared import root_path
+from deforum import root_path
 from deforum.rng.rng import ImageRNG
 
 
@@ -36,9 +36,9 @@ class ComfyDeforumGenerator:
         if not lcm:
             if model_path == None:
                 models_dir = os.path.join(default_cache_folder)
-                fetch_and_download_model("125703", default_cache_folder)
-                model_path = os.path.join(models_dir, "protovisionXLHighFidelity3D_release0620Bakedvae.safetensors")
-                # model_path = os.path.join(models_dir, "SSD-1B.safetensors")
+                filename = fetch_and_download_model("125703", default_cache_folder)
+                model_path = os.path.join(models_dir, filename)
+                # model_path = "/home/mix/Downloads/SSD-1B.safetensors"
 
             self.load_model(model_path, trt)
 
@@ -59,9 +59,9 @@ class ComfyDeforumGenerator:
 
         return {"samples":latent}
 
-    def generate_latent(self, width, height, seed, subseed, subseed_strength, seed_resize_from_h=None, seed_resize_from_w=None):
+    def generate_latent(self, width, height, seed, subseed, subseed_strength, seed_resize_from_h=None, seed_resize_from_w=None, reset_noise=False):
         shape = [4, height // 8, width // 8]
-        if self.rng == None:
+        if self.rng == None or reset_noise:
             self.rng = ImageRNG(shape=shape, seeds=[seed], subseeds=[subseed], subseed_strength=subseed_strength, seed_resize_from_h=seed_resize_from_h, seed_resize_from_w=seed_resize_from_w)
         noise = self.rng.next()
         # noise = torch.zeros([1, 4, width // 8, height // 8])
@@ -84,7 +84,7 @@ class ComfyDeforumGenerator:
             def __init__(self, model):
                 self.model = model
         # comfy.sd.load_checkpoint_guess_config
-        # model_path = root_path+"/models/checkpoints/SSD-1B.safetensors"
+        #model_path = "/home/mix/Downloads/SSD-1B.safetensors"
         import comfy.sd
         self.model, self.clip, self.vae, clipvision = comfy.sd.load_checkpoint_guess_config(model_path, output_vae=True,
                                                                              output_clip=True,
@@ -92,9 +92,11 @@ class ComfyDeforumGenerator:
                                                                              output_clipvision=False,
                                                                              )
 
+        lora_path = "/home/mix/Downloads/D4ll34_001-step00022000.safetensors"
+        lora = comfy.utils.load_torch_file(lora_path, safe_load=False)
+        self.model, self.clip = comfy.sd.load_lora_for_models(self.model, self.clip, lora, 1.0, 1.0)
         if trt:
             from deforum.datafunctions.enable_comfy_trt import TrtUnet
-
             self.model.model.diffusion_model = TrtUnet()
 
     def load_lcm(self):
@@ -148,6 +150,7 @@ class ComfyDeforumGenerator:
                  last_step=None,
                  seed_resize_from_h=1024,
                  seed_resize_from_w=1024,
+                 reset_noise=False,
                  *args,
                  **kwargs):
 
@@ -172,7 +175,7 @@ class ComfyDeforumGenerator:
                     width = 1024
                 if height == None:
                     height = 960
-                latent = self.generate_latent(width, height, seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w)
+                latent = self.generate_latent(width, height, seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w, reset_noise)
 
             else:
                 latent = torch.from_numpy(np.array(init_image).astype(np.float32) / 255.0).unsqueeze(0)
